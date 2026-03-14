@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.venv/
+
+# Çevre Değişkenleri (ÇOK ÖNEMLİ)
+.env
+
+# IDE ve İşletim Sistemi
+.vscode/
+.idea/
+.DS_Store
+
+# Loglar ve Veritabanı
+*.log
+*.sqlite3
