@@ -5,6 +5,7 @@ from datetime import datetime
 from backend.core.schemas import FrameData
 from backend.cv_engine.buffer import SlidingWindowBuffer
 from backend.cv_engine.extractors import gaze, emotion, gesture
+from backend.agents.chain import AgentCoordinator
 
 # Karar Motorumuzu (Scorer) içeri aktarıyoruz
 from backend.scorer.scorer import AttentionScorer
@@ -16,7 +17,8 @@ class CVPipeline:
         self.buffer = SlidingWindowBuffer(window_size_sec=window_size, fps=fps)
         self.scorer = AttentionScorer(fps=fps) # Skorlayıcıyı başlattık
         self.delay_between_frames = int(1000 / fps)
-        
+        self.coordinator = AgentCoordinator()
+
         self.frame_count = 0 # Ne zaman rapor vereceğimizi bilmek için sayaç
         
     def start(self):
@@ -74,13 +76,23 @@ class CVPipeline:
                 print("="*40)
                 print(f"🎯 DİKKAT SKORU: {result['score']:.0f} / 100")
                 
-                if result['reasons']:
-                    print("⚠️  Tespit Edilen Sorunlar:")
+                if result['score'] < 80.0:
+                    print("⚠️  Sorunlar:")
                     for r in result['reasons']:
                         print(f"   - {r}")
+                        
+                    print("\n🤖 LANGCHAIN AJANLARI DEVREYE GİRİYOR...")
+                    
+                    # Veriyi AgentCoordinator (chain.py) dosyasına gönderiyoruz
+                    agent_result = self.coordinator.process_low_attention(
+                        score=result['score'], 
+                        reasons=result['reasons']
+                    )
+                    
+                    print(f"💡 Pedagojik Öneri: {agent_result['action_advice']}")
                 else:
+
                     print("✅  Durum: Öğrenci pür dikkat derste!")
-                print("="*40 + "\n")
 
             # Geliştirici ekranı
             cv2.imshow('EduFocus AI - Kamera', frame)

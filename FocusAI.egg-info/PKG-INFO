@@ -15,4 +15,5 @@ Requires-Dist: deepface>=0.0.84
 Requires-Dist: langchain>=0.1.13
 Requires-Dist: langgraph>=0.0.30
 Requires-Dist: openai>=1.14.0
+Requires-Dist: langchain_openai
 Requires-Dist: python-dotenv>=1.0.1
