@@ -16,7 +16,7 @@ dependencies = [
     
     # Görüntü İşleme (CV) & Yapay Zeka
     "opencv-python>=4.9.0",
-    "mediapipe>=0.10.11",
+    "mediapipe==0.10.14",
     "deepface>=0.0.84",
     
     # LLM & Ajanlar
