@@ -1,18 +1,25 @@
 # backend/cv_engine/pipeline.py
 import cv2
 from datetime import datetime
+
 from backend.core.schemas import FrameData
 from backend.cv_engine.buffer import SlidingWindowBuffer
-from backend.cv_engine.extractors import gaze, pose, emotion, gesture
+from backend.cv_engine.extractors import gaze, emotion, gesture
+
+# Karar Motorumuzu (Scorer) içeri aktarıyoruz
+from backend.scorer.scorer import AttentionScorer
 
 class CVPipeline:
     def __init__(self, camera_id: int = 0, fps: int = 5, window_size: int = 5):
         self.camera_id = camera_id
+        self.fps = fps
         self.buffer = SlidingWindowBuffer(window_size_sec=window_size, fps=fps)
-        self.delay_between_frames = int(1000 / fps) # 5 FPS için 200ms bekleme
+        self.scorer = AttentionScorer(fps=fps) # Skorlayıcıyı başlattık
+        self.delay_between_frames = int(1000 / fps)
+        
+        self.frame_count = 0 # Ne zaman rapor vereceğimizi bilmek için sayaç
         
     def start(self):
-        """Kamerayı açar ve sonsuz frame yakalama döngüsünü başlatır."""
         cap = cv2.VideoCapture(self.camera_id)
         
         if not cap.isOpened():
@@ -20,20 +27,28 @@ class CVPipeline:
             return
 
         print("Dikkat Analiz Kamerası Başlatıldı. Çıkmak için 'q' tuşuna basın.")
+        print("İlk analiz için 5 saniye bekleniyor...")
 
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
                 
-            # Kameradan gelen görüntüyü analiz modüllerine gönderiyoruz
-            # (İleride bu fonksiyonların içini MediaPipe ve DeepFace ile dolduracağız)
+            # 1. Kameradan verileri çek (Extractors)
             is_looking = gaze.check_gaze_on_screen(frame)
             ear_value = gaze.calculate_ear(frame)
             is_bored = emotion.check_boredom(frame)
-            is_hand_on_chin = gesture.check_hand_on_chin(frame)
+            
+            # Not: Eğer gesture.py dosyasını tamamen doldurmadıysanız 
+            # burası hata verebilir. Eğer hata verirse aşağıdaki satırı:
+            # is_hand_on_chin = False 
+            # şeklinde değiştirebilirsiniz.
+            try:
+                is_hand_on_chin = gesture.check_hand_on_chin(frame)
+            except Exception:
+                is_hand_on_chin = False
 
-            # 1. Adım: Çıkarılan bu özellikleri Pydantic şemamıza (Sözleşmeye) uyarlıyoruz
+            # 2. Veriyi Sözleşmeye (Schema) uygun hale getir
             current_data = FrameData(
                 timestamp=datetime.now(),
                 gaze_on_screen=is_looking,
@@ -42,32 +57,40 @@ class CVPipeline:
                 ear_score=ear_value
             )
 
-            # 2. Adım: Veriyi Sliding Window (Kayan Pencere) tamponuna ekliyoruz
+            # 3. Hafızaya (Buffer) ekle
             self.buffer.add_frame(current_data)
+            self.frame_count += 1
 
-            # 3. Adım: Eğer 5 saniyelik tampon dolduysa, skorlama motoruna gönder
-            if self.buffer.is_ready():
+            # 4. SKORLAMA ZAMANI: Buffer doluysa VE tam 5 saniyenin (25 karenin) sonundaysak
+            if self.buffer.is_ready() and self.frame_count % self.buffer.max_frames == 0:
                 window_data = self.buffer.get_window_data()
                 
-                # Sadece test amaçlı: Buffer'daki son karedeki verileri ekrana yazdırıyoruz
-                son_kare = window_data[-1] 
-                print("\n--- 5 SANİYELİK BLOK DOLDU ---")
-                print(f"Göz Açıklığı (EAR): {son_kare.ear_score:.3f}")
-                print(f"El Çenede mi?: {son_kare.hand_on_chin}")
-                print(f"Sıkılmış mı?: {son_kare.emotion_bored}")
-                print("------------------------------")
+                # Beyin (Scorer) devreye giriyor!
+                result = self.scorer.compute_score(window_data)
+                
+                # Çıktıyı firmaların seveceği profesyonel bir terminal arayüzüyle yazdırıyoruz
+                print("\n" + "="*40)
+                print(f"📊 DİKKAT ANALİZ RAPORU (Son 5 Saniye)")
+                print("="*40)
+                print(f"🎯 DİKKAT SKORU: {result['score']:.0f} / 100")
+                
+                if result['reasons']:
+                    print("⚠️  Tespit Edilen Sorunlar:")
+                    for r in result['reasons']:
+                        print(f"   - {r}")
+                else:
+                    print("✅  Durum: Öğrenci pür dikkat derste!")
+                print("="*40 + "\n")
 
-            # Geliştirici için kamerayı ekranda göster (Debug amaçlı)
+            # Geliştirici ekranı
             cv2.imshow('EduFocus AI - Kamera', frame)
             
-            # FPS ayarı ve 'q' ile çıkış
             if cv2.waitKey(self.delay_between_frames) & 0xFF == ord('q'):
                 break
 
         cap.release()
         cv2.destroyAllWindows()
 
-# Sadece bu dosyayı test etmek istersek:
 if __name__ == "__main__":
     pipeline = CVPipeline(fps=5)
     pipeline.start()
