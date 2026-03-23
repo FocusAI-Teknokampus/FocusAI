@@ -1,0 +1,7 @@
+README.md
+pyproject.toml
+FocusAI.egg-info/PKG-INFO
+FocusAI.egg-info/SOURCES.txt
+FocusAI.egg-info/dependency_links.txt
+FocusAI.egg-info/requires.txt
+FocusAI.egg-info/top_level.txt
