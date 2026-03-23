@@ -18,3 +18,6 @@ env/
 *.log
 *.sqlite3*.egg-info/
 *.egg-info/
+
+data/mem0/
+data/faiss_index/
