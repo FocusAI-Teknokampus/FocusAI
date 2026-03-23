@@ -9,8 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.core.config import settings
-from backend.api.routers import session, chat, dashboard
-
+from backend.api.routers import session, chat, dashboard, upload
 
 app = FastAPI(
     title=settings.app_name,
@@ -32,6 +31,7 @@ app.add_middleware(
 app.include_router(session.router,   prefix="/session",   tags=["Session"])
 app.include_router(chat.router,      prefix="/chat",       tags=["Chat"])
 app.include_router(dashboard.router, prefix="/dashboard",  tags=["Dashboard"])
+app.include_router(upload.router, prefix="/upload", tags=["Upload"])
 
 
 # ── Sağlık kontrolü ───────────────────────────────────────────────────────────

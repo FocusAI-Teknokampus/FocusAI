@@ -200,19 +200,26 @@ def clarify_node(state: MentorGraphState) -> dict:
 def rag_node(state: MentorGraphState) -> dict:
     """
     Kullanıcının notlarında ilgili içerik var mı arar.
-    RAG Agent (K2) buraya bağlanacak.
-    Şimdilik: None döner (not yok).
+    RAGAgent burada çalışır.
+ 
+    Kullanıcının indexlenmiş notu yoksa → None döner, LLM kendi bilgisiyle cevaplar.
+    Not varsa ve alakalı chunk bulunduysa → mentor_agent bu içeriği kullanır.
     """
-    # Hafta 2'de K2'nin RAGAgent'ı buraya gelecek:
-    # from backend.agents.rag_agent import RAGAgent
-    # agent = RAGAgent()
-    # result = agent.search(
-    #     query=state["message"].content,
-    #     user_id=state["message"].user_id
-    # )
-    # return {"rag_context": result.source_chunk if result.found else None}
-
-    return {"rag_context": None}
+    from backend.rag.rag_agent import RAGAgent
+ 
+    agent = RAGAgent()
+    message = state["message"]
+ 
+    # Kullanıcının hiç notu yoksa direkt geç
+    if not agent.has_notes(message.user_id):
+        return {"rag_context": None}
+ 
+    result = agent.search(
+        user_id=message.user_id,
+        query=message.content,
+    )
+ 
+    return {"rag_context": result.source_chunk if result.found else None}
 
 
 def response_node(state: MentorGraphState) -> dict:
