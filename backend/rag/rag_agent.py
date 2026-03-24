@@ -138,6 +138,18 @@ class RAGAgent:
 
     return self.retriever.search(user_id, enriched_query)
 
+    def delete_notes(self, user_id: str) -> bool:
+    """
+    Kullanıcının tüm FAISS index'ini siler.
+    Dashboard'daki 'notları temizle' butonu bunu çağırır.
+    """
+    import shutil
+    from pathlib import Path
+    index_path = Path(settings.faiss_index_path) / user_id
+    if index_path.exists():
+        shutil.rmtree(index_path)
+        return True
+    return False
 
 
     
