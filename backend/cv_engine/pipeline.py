@@ -1,108 +1,285 @@
-# backend/cv_engine/pipeline.py
-import cv2
-from datetime import datetime
+"""
+CV Engine — Ana Pipeline
+Kamerayı açar, her frame'i extractors'a gönderir,
+CameraSignal üretir ve FrameBuffer'a yazar.
+Kamera yoksa FallbackSignal döner — sistem çökmez.
+"""
 
-from backend.core.schemas import FrameData
-from backend.cv_engine.buffer import SlidingWindowBuffer
-from backend.cv_engine.extractors import gaze, emotion, gesture
-from backend.agents.chain import AgentCoordinator
+import time
+import threading
+import numpy as np
+from typing import Optional, Callable
 
-# Karar Motorumuzu (Scorer) içeri aktarıyoruz
-from backend.scorer.scorer import AttentionScorer
+from .buffer import FrameBuffer
+from .extractors import GazeExtractor, GestureExtractor, EmotionExtractor
+
+
+# --------------------------------------------------------------------------
+# CameraSignal — Feature Extractor'a giden ana veri yapısı
+# --------------------------------------------------------------------------
+
+class CameraSignal:
+    """
+    pipeline.py'ın ürettiği sinyal.
+    Feature Extractor (state/feature_extractor.py) bu nesneyi alır.
+    """
+
+    def __init__(
+        self,
+        active: bool,
+        gaze: Optional[dict],
+        gesture: Optional[dict],
+        emotion: Optional[dict],
+        timestamp: float,
+        frame_id: int,
+        processing_ms: float,
+    ):
+        self.active = active          # Kamera çalışıyor mu?
+        self.gaze = gaze              # GazeExtractor çıktısı
+        self.gesture = gesture        # GestureExtractor çıktısı
+        self.emotion = emotion        # EmotionExtractor çıktısı (3 sn'de bir)
+        self.timestamp = timestamp
+        self.frame_id = frame_id
+        self.processing_ms = processing_ms
+
+    @property
+    def attention_score(self) -> Optional[float]:
+        """
+        0.0–1.0 arası dikkat skoru.
+        Kamera kapalıysa None — Feature Extractor bunu handle eder.
+        """
+        if not self.active or self.gaze is None or self.gesture is None:
+            return None
+
+        score = 1.0
+
+        # Göz sinyalleri
+        if self.gaze.get("is_drowsy"):
+            score -= 0.4
+        elif self.gaze.get("ear_avg", 0.3) < 0.25:
+            score -= 0.2
+        if self.gaze.get("gaze_direction") in ("left", "right", "down"):
+            score -= 0.2
+
+        # Baş pozu
+        if self.gesture.get("is_head_down"):
+            score -= 0.3
+        if self.gesture.get("is_head_turned"):
+            score -= 0.2
+
+        # El sinyalleri
+        if self.gesture.get("hand_on_chin") or self.gesture.get("hand_on_face"):
+            score -= 0.1
+
+        # Duygu (opsiyonel)
+        if self.emotion and self.emotion.get("is_distracted_emotion"):
+            score -= 0.1
+
+        return round(max(0.0, min(1.0, score)), 3)
+
+    def to_dict(self) -> dict:
+        return {
+            "active":          self.active,
+            "gaze":            self.gaze,
+            "gesture":         self.gesture,
+            "emotion":         self.emotion,
+            "timestamp":       self.timestamp,
+            "frame_id":        self.frame_id,
+            "processing_ms":   self.processing_ms,
+            "attention_score": self.attention_score,
+        }
+
+
+def _fallback(reason: str = "unavailable") -> CameraSignal:
+    return CameraSignal(
+        active=False,
+        gaze=None,
+        gesture=None,
+        emotion=None,
+        timestamp=time.time(),
+        frame_id=0,
+        processing_ms=0.0,
+    )
+
+
+# --------------------------------------------------------------------------
+# CVPipeline
+# --------------------------------------------------------------------------
 
 class CVPipeline:
-    def __init__(self, camera_id: int = 0, fps: int = 5, window_size: int = 5):
-        self.camera_id = camera_id
-        self.fps = fps
-        self.buffer = SlidingWindowBuffer(window_size_sec=window_size, fps=fps)
-        self.scorer = AttentionScorer(fps=fps) # Skorlayıcıyı başlattık
-        self.delay_between_frames = int(1000 / fps)
-        self.coordinator = AgentCoordinator()
+    """
+    Tek bir nesne — uygulama başlarken bir kez oluşturulur.
 
-        self.frame_count = 0 # Ne zaman rapor vereceğimizi bilmek için sayaç
-        
-    def start(self):
-        cap = cv2.VideoCapture(self.camera_id)
-        
-        if not cap.isOpened():
-            print("Hata: Kamera açılamadı!")
-            return
+    Kullanım (main.py veya feature_extractor.py):
+        pipeline = CVPipeline()
+        pipeline.start()
+        signal = pipeline.latest()   # Feature Extractor bunu çağırır
+        pipeline.stop()
+    """
 
-        print("Dikkat Analiz Kamerası Başlatıldı. Çıkmak için 'q' tuşuna basın.")
-        print("İlk analiz için 5 saniye bekleniyor...")
+    def __init__(
+        self,
+        camera_index: int = 0,
+        target_fps: int = 15,
+        use_emotion: bool = False,      # DeepFace ağır, varsayılan kapalı
+        on_signal: Optional[Callable[[CameraSignal], None]] = None,
+    ):
+        self.camera_index = camera_index
+        self.target_fps = target_fps
+        self.use_emotion = use_emotion
+        self.on_signal = on_signal
 
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-                
-            # 1. Kameradan verileri çek (Extractors)
-            is_looking = gaze.check_gaze_on_screen(frame)
-            ear_value = gaze.calculate_ear(frame)
-            is_bored = emotion.check_boredom(frame)
-            
-            # Not: Eğer gesture.py dosyasını tamamen doldurmadıysanız 
-            # burası hata verebilir. Eğer hata verirse aşağıdaki satırı:
-            # is_hand_on_chin = False 
-            # şeklinde değiştirebilirsiniz.
+        self._gaze = GazeExtractor()
+        self._gesture = GestureExtractor()
+        self._emotion = EmotionExtractor() if use_emotion else None
+
+        self._buffer = FrameBuffer()
+        self._cap = None
+        self._thread: Optional[threading.Thread] = None
+        self._running = False
+        self._frame_id = 0
+        self._error_count = 0
+
+        self._latest: CameraSignal = _fallback("disabled")
+        self._lock = threading.Lock()
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def start(self) -> bool:
+        """
+        Pipeline'ı başlat.
+        Kamera yoksa False döner ama uygulama çalışmaya devam eder.
+        """
+        if self._running:
+            return True
+
+        ok_gaze    = self._gaze.initialize()
+        ok_gesture = self._gesture.initialize()
+        if not ok_gaze or not ok_gesture:
+            print("[CVPipeline] Extractor başlatılamadı. Kamerasız modda devam.")
+            return False
+
+        if self.use_emotion and self._emotion:
+            self._emotion.initialize()
+
+        if not self._open_camera():
+            return False
+
+        self._running = True
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+        print(f"[CVPipeline] Başlatıldı — kamera {self.camera_index} @ {self.target_fps} FPS")
+        return True
+
+    def stop(self):
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=3.0)
+        self._release_camera()
+        self._gaze.release()
+        self._gesture.release()
+        if self._emotion:
+            self._emotion.release()
+        print("[CVPipeline] Durduruldu.")
+
+    def latest(self) -> CameraSignal:
+        """Feature Extractor bu metodu çağırır — thread-safe."""
+        with self._lock:
+            return self._latest
+
+    def buffer(self) -> FrameBuffer:
+        """Son N frame'e erişmek için."""
+        return self._buffer
+
+    @property
+    def is_active(self) -> bool:
+        with self._lock:
+            return self._latest.active
+
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
+
+    def _open_camera(self) -> bool:
+        try:
+            import cv2
+            self._cap = cv2.VideoCapture(self.camera_index)
+            if not self._cap.isOpened():
+                self._cap = None
+                print(f"[CVPipeline] Kamera {self.camera_index} açılamadı. Kamerasız modda devam.")
+                return False
+            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH,  640)
+            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            self._cap.set(cv2.CAP_PROP_FPS, self.target_fps)
+            return True
+        except Exception as e:
+            print(f"[CVPipeline] Kamera hatası: {e}")
+            return False
+
+    def _release_camera(self):
+        if self._cap:
             try:
-                is_hand_on_chin = gesture.check_hand_on_chin(frame)
+                self._cap.release()
             except Exception:
-                is_hand_on_chin = False
+                pass
+            self._cap = None
 
-            # 2. Veriyi Sözleşmeye (Schema) uygun hale getir
-            current_data = FrameData(
-                timestamp=datetime.now(),
-                gaze_on_screen=is_looking,
-                hand_on_chin=is_hand_on_chin,
-                emotion_bored=is_bored,
-                ear_score=ear_value
+    def _loop(self):
+        import cv2
+        interval = 1.0 / self.target_fps
+
+        while self._running:
+            t0 = time.time()
+
+            if not self._cap or not self._cap.isOpened():
+                self._error_count += 1
+                if self._error_count > 10:
+                    print("[CVPipeline] Kamera bağlantısı kesildi.")
+                    break
+                time.sleep(0.5)
+                continue
+
+            ret, frame_bgr = self._cap.read()
+            if not ret or frame_bgr is None:
+                self._error_count += 1
+                continue
+            self._error_count = 0
+
+            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+
+            tp = time.time()
+            gaze    = self._gaze.extract(frame_rgb)
+            gesture = self._gesture.extract(frame_rgb)
+            # Emotion BGR ister, diğerleri RGB
+            emotion = self._emotion.extract(frame_bgr) if self._emotion else None
+            proc_ms = (time.time() - tp) * 1000
+
+            self._frame_id += 1
+            signal = CameraSignal(
+                active=True,
+                gaze=gaze,
+                gesture=gesture,
+                emotion=emotion,
+                timestamp=time.time(),
+                frame_id=self._frame_id,
+                processing_ms=round(proc_ms, 1),
             )
 
-            # 3. Hafızaya (Buffer) ekle
-            self.buffer.add_frame(current_data)
-            self.frame_count += 1
+            with self._lock:
+                self._latest = signal
 
-            # 4. SKORLAMA ZAMANI: Buffer doluysa VE tam 5 saniyenin (25 karenin) sonundaysak
-            if self.buffer.is_ready() and self.frame_count % self.buffer.max_frames == 0:
-                window_data = self.buffer.get_window_data()
-                
-                # Beyin (Scorer) devreye giriyor!
-                result = self.scorer.compute_score(window_data)
-                
-                # Çıktıyı firmaların seveceği profesyonel bir terminal arayüzüyle yazdırıyoruz
-                print("\n" + "="*40)
-                print(f"📊 DİKKAT ANALİZ RAPORU (Son 5 Saniye)")
-                print("="*40)
-                print(f"🎯 DİKKAT SKORU: {result['score']:.0f} / 100")
-                
-                if result['score'] < 80.0:
-                    print("⚠️  Sorunlar:")
-                    for r in result['reasons']:
-                        print(f"   - {r}")
-                        
-                    print("\n🤖 LANGCHAIN AJANLARI DEVREYE GİRİYOR...")
-                    
-                    # Veriyi AgentCoordinator (chain.py) dosyasına gönderiyoruz
-                    agent_result = self.coordinator.process_low_attention(
-                        score=result['score'], 
-                        reasons=result['reasons']
-                    )
-                    
-                    print(f"💡 Pedagojik Öneri: {agent_result['action_advice']}")
-                else:
+            self._buffer.push(signal.to_dict())
 
-                    print("✅  Durum: Öğrenci pür dikkat derste!")
+            if self.on_signal:
+                try:
+                    self.on_signal(signal)
+                except Exception as e:
+                    print(f"[CVPipeline] Callback hatası: {e}")
 
-            # Geliştirici ekranı
-            cv2.imshow('EduFocus AI - Kamera', frame)
-            
-            if cv2.waitKey(self.delay_between_frames) & 0xFF == ord('q'):
-                break
+            sleep = interval - (time.time() - t0)
+            if sleep > 0:
+                time.sleep(sleep)
 
-        cap.release()
-        cv2.destroyAllWindows()
-
-if __name__ == "__main__":
-    pipeline = CVPipeline(fps=5)
-    pipeline.start()
+        self._release_camera()

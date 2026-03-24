@@ -21,3 +21,5 @@ env/
 
 data/mem0/
 data/faiss_index/
+
+node_modules/

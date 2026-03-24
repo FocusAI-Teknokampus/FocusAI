@@ -1,65 +1,148 @@
-# backend/cv_engine/extractors/gesture.py
-import mediapipe as mp
-import math
-import cv2
+"""
+CV Engine / Extractors — Baş Pozu ve El Hareketi
+MediaPipe FaceMesh + Hands ile baş açıları ve el-yüz tespiti yapar.
+"""
 
-# MediaPipe Pose (İskelet ve Vücut Duruşu) modelini başlatıyoruz
-mp_pose = mp.solutions.pose
-pose = mp_pose.Pose(
-    static_image_mode=False,
-    min_detection_confidence=0.5,
-    min_tracking_confidence=0.5
-)
+import numpy as np
+from typing import Optional, Tuple
 
-def _euclidean_distance(p1, p2):
-    return math.dist(p1, p2)
+# Baş pozu eşikleri (derece)
+HEAD_DOWN_PITCH = 20.0
+HEAD_TURN_YAW   = 25.0
 
-def check_hand_on_chin(frame) -> bool:
+# Yüz bounding box genişletme
+FACE_BOX_EXPAND = 0.15
+
+# 3D referans noktaları (solvePnP için)
+_3D_POINTS = np.array([
+    [0.0,    0.0,    0.0  ],   # Burun ucu
+    [0.0,  -330.0,  -65.0],   # Çene
+    [-225.0, 170.0, -135.0],  # Sol göz köşesi
+    [225.0,  170.0, -135.0],  # Sağ göz köşesi
+    [-150.0,-150.0, -125.0],  # Sol ağız köşesi
+    [150.0, -150.0, -125.0],  # Sağ ağız köşesi
+], dtype=np.float64)
+
+_POSE_IDS = [1, 152, 263, 33, 287, 57]
+
+
+def _head_pose(landmarks, w: int, h: int) -> Tuple[float, float, float]:
+    try:
+        import cv2
+        img_pts = np.array(
+            [[landmarks[i].x * w, landmarks[i].y * h] for i in _POSE_IDS],
+            dtype=np.float64
+        )
+        focal = w
+        cam = np.array([[focal,0,w/2],[0,focal,h/2],[0,0,1]], dtype=np.float64)
+        ok, rvec, _ = cv2.solvePnP(_3D_POINTS, img_pts, cam, np.zeros((4,1)))
+        if not ok:
+            return 0.0, 0.0, 0.0
+        rmat, _ = cv2.Rodrigues(rvec)
+        sy = np.sqrt(rmat[0,0]**2 + rmat[1,0]**2)
+        if sy > 1e-6:
+            x = np.arctan2(rmat[2,1], rmat[2,2])
+            y = np.arctan2(-rmat[2,0], sy)
+            z = np.arctan2(rmat[1,0], rmat[0,0])
+        else:
+            x = np.arctan2(-rmat[1,2], rmat[1,1])
+            y = np.arctan2(-rmat[2,0], sy)
+            z = 0.0
+        return float(np.degrees(x)), float(np.degrees(y)), float(np.degrees(z))
+    except Exception:
+        return 0.0, 0.0, 0.0
+
+
+def _hand_near_face(hand_lms_list, face_lms) -> Tuple[bool, bool]:
+    if not hand_lms_list or face_lms is None:
+        return False, False
+    xs = [lm.x for lm in face_lms]
+    ys = [lm.y for lm in face_lms]
+    fx_min, fx_max = min(xs), max(xs)
+    fy_min, fy_max = min(ys), max(ys)
+    fh = fy_max - fy_min
+    chin_y = fy_max - fh * 0.35
+    e = FACE_BOX_EXPAND
+    on_face = False
+    on_chin = False
+    for hand in hand_lms_list:
+        for lm in hand.landmark:
+            if (fx_min - e) < lm.x < (fx_max + e) and (fy_min - e) < lm.y < (fy_max + e):
+                on_face = True
+                if lm.y > chin_y:
+                    on_chin = True
+                    break
+        if on_chin:
+            break
+    return on_chin, on_face
+
+
+class GestureExtractor:
     """
-    Öğrencinin elinin çenesinde/yüzünde olup olmadığını tespit eder.
-    El bilekleri ile ağız/burun arasındaki mesafeyi ölçer.
+    pipeline.py tarafından her frame'de çağrılır.
+    Baş açıları ve el bilgilerini dict olarak döndürür.
     """
-    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    results = pose.process(rgb_frame)
 
-    if not results.pose_landmarks:
-         return False # Kamerada insan iskeleti yok
+    def __init__(self):
+        self._face_mesh = None
+        self._hands = None
+        self._initialized = False
 
-    landmarks = results.pose_landmarks.landmark
-    h, w, _ = frame.shape
+    def initialize(self) -> bool:
+        try:
+            import mediapipe as mp
+            self._face_mesh = mp.solutions.face_mesh.FaceMesh(
+                max_num_faces=1,
+                refine_landmarks=False,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5,
+            )
+            self._hands = mp.solutions.hands.Hands(
+                max_num_hands=2,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5,
+            )
+            self._initialized = True
+            return True
+        except Exception as e:
+            print(f"[GestureExtractor] Başlatma hatası: {e}")
+            return False
 
-    # Önemli noktaların koordinatlarını alıyoruz
-    # 0: Burun, 9: Sol Ağız Kenarı, 10: Sağ Ağız Kenarı
-    # 15: Sol El Bileği, 16: Sağ El Bileği
-    
-    # Boyun/Çene merkezini tahmin etmek için ağız ve burun çevresini referans alıyoruz
-    nose = (landmarks[mp_pose.PoseLandmark.NOSE.value].x * w, 
-            landmarks[mp_pose.PoseLandmark.NOSE.value].y * h)
-            
-    left_wrist = (landmarks[mp_pose.PoseLandmark.LEFT_WRIST.value].x * w, 
-                  landmarks[mp_pose.PoseLandmark.LEFT_WRIST.value].y * h)
-                  
-    right_wrist = (landmarks[mp_pose.PoseLandmark.RIGHT_WRIST.value].x * w, 
-                   landmarks[mp_pose.PoseLandmark.RIGHT_WRIST.value].y * h)
+    def extract(self, frame_rgb: np.ndarray) -> Optional[dict]:
+        if not self._initialized:
+            return None
 
-    # El bileği ile yüz (burun/çene hattı) arasındaki mesafeyi ölçüyoruz
-    dist_left = _euclidean_distance(nose, left_wrist)
-    dist_right = _euclidean_distance(nose, right_wrist)
+        h, w = frame_rgb.shape[:2]
 
-    # Yüzün kendi büyüklüğünü referans alarak dinamik bir eşik değeri (threshold) belirliyoruz.
-    # Omuzlar arası mesafe, kişinin kameraya ne kadar yakın olduğunu anlamak için harika bir referanstır.
-    left_shoulder = (landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].x * w, 
-                     landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].y * h)
-    right_shoulder = (landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].x * w, 
-                      landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].y * h)
-    
-    shoulder_width = _euclidean_distance(left_shoulder, right_shoulder)
-    
-    # Eşik değeri: Eğer el, omuz genişliğinin %30'undan daha fazla yüze yaklaşmışsa, "el çenededir".
-    threshold = shoulder_width * 0.30
+        face_lms = None
+        pitch = yaw = roll = 0.0
+        if self._face_mesh:
+            fr = self._face_mesh.process(frame_rgb)
+            if fr.multi_face_landmarks:
+                face_lms = fr.multi_face_landmarks[0].landmark
+                pitch, yaw, roll = _head_pose(face_lms, w, h)
 
-    # Eğer sağ veya sol el yüze temas edecek kadar yakınsa True döndür
-    if dist_left < threshold or dist_right < threshold:
-        return True
+        hand_lms_list = None
+        if self._hands:
+            hr = self._hands.process(frame_rgb)
+            hand_lms_list = hr.multi_hand_landmarks if hr else None
 
-    return False
+        on_chin, on_face = _hand_near_face(hand_lms_list, face_lms)
+
+        return {
+            "head_pitch":    round(pitch, 1),
+            "head_yaw":      round(yaw, 1),
+            "head_roll":     round(roll, 1),
+            "is_head_down":  pitch > HEAD_DOWN_PITCH,
+            "is_head_turned": abs(yaw) > HEAD_TURN_YAW,
+            "hand_on_chin":  on_chin,
+            "hand_on_face":  on_face,
+            "hand_detected": bool(hand_lms_list),
+        }
+
+    def release(self):
+        if self._face_mesh:
+            self._face_mesh.close()
+        if self._hands:
+            self._hands.close()
+        self._initialized = False
