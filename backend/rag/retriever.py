@@ -171,10 +171,10 @@ class FAISSRetriever:
         return self._get_index_path(user_id).exists()
 
     def get_all_filenames(self, user_id: str) -> list[str]:
-    """
-    FAISS index'indeki tüm benzersiz dosya adlarını döner.
-    Dashboard'da 'yüklediğin notlar: türev.pdf, integral.pdf' için.
-    """
+        """
+         FAISS index'indeki tüm benzersiz dosya adlarını döner.
+        Dashboard'da 'yüklediğin notlar: türev.pdf, integral.pdf' için.
+        """
         index_path = self._get_index_path(user_id)
         if not index_path.exists():
             return []
