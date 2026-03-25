@@ -263,9 +263,9 @@ class UserProfile(BaseModel):
     """
     user_id: str
     preferred_explanation_style: str = "detailed"  # "brief" | "detailed" | "example_heavy"
-    weak_topics: list[str] = []           # Zorlandığı konular
-    strong_topics: list[str] = []         # İyi olduğu konular
-    recurring_misconceptions: list[str] = []  # Tekrarlayan yanlış anlamalar
+    weak_topics: list[str] = Field(default_factory=list)          # Zorlandığı konular
+    strong_topics: list[str] = Field(default_factory=list)         # İyi olduğu konular
+    recurring_misconceptions: list[str] = Field(default_factory=list)  # Tekrarlayan yanlış anlamalar
     avg_session_duration_minutes: float = 0.0
     adaptive_threshold: float = 0.75     # Kişiye özel UE eşiği
     total_sessions: int = 0
@@ -281,11 +281,11 @@ class ShortTermContext(BaseModel):
     session_id: str
     user_id: str
     topic: Optional[str] = None
-    messages: list[dict] = []            # {"role": "user"/"assistant", "content": "..."}
+    messages: list[dict] = Field(default_factory=list)            # {"role": "user"/"assistant", "content": "..."}
     current_state: UserState = UserState.UNKNOWN
     retry_count: int = 0
     last_intervention_at: Optional[datetime] = None
-    topics_covered: list[str] = []
+    topics_covered: list[str] = Field(default_factory=list)
 
 
 # ─────────────────────────────────────────
@@ -348,17 +348,17 @@ class SessionSummary(BaseModel):
     topic: Optional[str]
 
     # Odak analizi
-    focus_timeline: list[FocusDataPoint] = []
+    focus_timeline: list[FocusDataPoint] = Field(default_factory=list)
     avg_focus_score: float = 0.0
 
     # Öğrenme analizi
-    topics_covered: list[str] = []
-    detected_patterns: list[LearningPattern] = []
+    topics_covered: list[str] = Field(default_factory=list)
+    detected_patterns: list[LearningPattern] = Field(default_factory=list)
     intervention_count: int = 0
     misconception_count: int = 0
 
     # Yarın için öneri
-    recommended_topics: list[str] = []
+    recommended_topics: list[str] = Field(default_factory=list)
     mentor_note: Optional[str] = None    # Genel değerlendirme cümlesi
 
 

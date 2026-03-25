@@ -1,22 +1,16 @@
 # backend/api/routers/chat.py
-#
-# Chat endpoint'i — sistemin kalbi.
-# Her kullanıcı mesajını alır, LangGraph üzerinden işler, yanıt döner.
-#
-# POST /chat  → mentor_graph.invoke() → ChatResponse
-#
-# Akış:
-#   1. Mesajı al ve session'ın var olduğunu doğrula
-#   2. Graph'ı invoke et (session → feature → state → uncertainty → mentor → rag → response)
-#   3. Session context'ini güncelle (mesaj geçmişine ekle)
-#   4. ChatResponse döner
 
 import logging
-from fastapi import APIRouter, HTTPException
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 
 from backend.agents.graph import mentor_graph
 from backend.agents.session_agent import SessionAgent
-from backend.core.schemas import ChatMessage, ChatResponse, UserState
+from backend.core.database import get_db
+from backend.core.schemas import ChatMessage, ChatResponse
+from backend.services.session_service import SessionService
+from backend.services.behavior_service import BehaviorService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -24,49 +18,44 @@ router = APIRouter()
 _session_agent = SessionAgent()
 
 
-# ── POST /chat ────────────────────────────────────────────────────────────────
-
 @router.post("", response_model=ChatResponse)
-def chat(message: ChatMessage) -> ChatResponse:
+def chat(
+    message: ChatMessage,
+    db: Session = Depends(get_db),
+) -> ChatResponse:
     """
-    Kullanıcıdan gelen mesajı işler, LLM yanıtı döner.
+    Kullanıcı mesajını işler ve mentor yanıtı döner.
 
-    İstek gövdesi (ChatMessage):
-        session_id    : /session/start'tan alınan kimlik
-        user_id       : kullanıcı kimliği
-        content       : kullanıcının mesajı
-        channel       : TEXT | IMAGE (varsayılan: TEXT)
-        image_base64  : fotoğraf varsa base64 (opsiyonel)
-
-    Döner (ChatResponse):
-        content              : LLM'in ürettiği yanıt
-        mentor_intervention  : varsa proaktif müdahale mesajı
-        current_state        : kullanıcının tespit edilen durumu
-        rag_source           : RAG kullandıysa nottan alınan bölüm
+    Akış:
+        1. Session RAM'de var mı kontrol edilir
+        2. Graph çalıştırılır
+        3. User message RAM + DB'ye yazılır
+        4. Behavior/focus event'leri kaydedilir
+        5. Intervention varsa kaydedilir
+        6. Assistant message RAM + DB'ye yazılır
     """
-    # ── 1. Session'ın var olduğunu doğrula ───────────────────────────
     context = _session_agent.load_context(message.session_id)
     if context is None:
         raise HTTPException(
             status_code=404,
-            detail=f"session_id '{message.session_id}' bulunamadı. "
-                   "Önce /session/start ile oturum açın.",
+            detail=(
+                f"session_id '{message.session_id}' bulunamadı. "
+                "Önce /session/start ile oturum açın."
+            ),
         )
 
-    # ── 2. Graph'ı çalıştır ───────────────────────────────────────────
-    # Initial state: sadece gelen mesaj dolu, gerisini node'lar dolduracak.
     initial_state = {
-        "message":          message,
-        "session_context":  None,
-        "user_profile":     None,
-        "feature_vector":   None,
-        "state_estimate":   None,
+        "message": message,
+        "session_context": None,
+        "user_profile": None,
+        "feature_vector": None,
+        "state_estimate": None,
         "should_intervene": False,
-        "intervention":     None,
-        "rag_context":      None,
-        "llm_response":     None,
-        "final_response":   None,
-        "error":            None,
+        "intervention": None,
+        "rag_context": None,
+        "llm_response": None,
+        "final_response": None,
+        "error": None,
     }
 
     try:
@@ -85,38 +74,59 @@ def chat(message: ChatMessage) -> ChatResponse:
             detail="Graph tamamlandı ancak yanıt üretilemedi.",
         )
 
-    # ── 3. Yanıtı al ─────────────────────────────────────────────────
-    final: ChatResponse | None = result.get("final_response")
-
-    if final is None:
-        # Graph tamamlandı ama response üretilemedi — savunmacı fallback.
-        raise HTTPException(
-            status_code=500,
-            detail="Graph tamamlandı ancak yanıt üretilemedi.",
-        )
-
-    # ── 4. Session context'ini güncelle ──────────────────────────────
-    # Kullanıcı mesajını ve asistan yanıtını geçmişe ekle.
-
     state_estimate = result.get("state_estimate")
     feature_vector = result.get("feature_vector")
+    intervention = result.get("intervention")
 
     new_state = state_estimate.state if state_estimate else None
     detected_topic = feature_vector.topic if feature_vector and feature_vector.topic else None
+    llm_confidence = state_estimate.confidence if state_estimate else None
 
+    # 1) Kullanıcı mesajını kaydet
     _session_agent.update_context(
         session_id=message.session_id,
         role="user",
         content=message.content,
+        db=db,
         new_state=new_state,
         topic=detected_topic,
+        message_type="question",
+        llm_confidence=llm_confidence,
     )
 
+    # 2) Davranış + focus event'lerini kaydet
+    behavior_service = BehaviorService(db)
+    behavior_service.persist_analysis(
+        session_id=message.session_id,
+        user_id=message.user_id,
+        feature_vector=feature_vector,
+        state_estimate=state_estimate,
+    )
+
+    # 3) Müdahale varsa kaydet
+    if intervention is not None and intervention.message:
+        session_service = SessionService(db)
+        session_service.save_intervention(
+            session_id=message.session_id,
+            user_id=message.user_id,
+            intervention_type=intervention.intervention_type.value,
+            message=intervention.message,
+            triggered_by=intervention.triggered_by.value if intervention.triggered_by else None,
+            reason="Graph uncertainty/mentor flow sonucunda üretildi.",
+            confidence=intervention.confidence,
+            was_successful=None,
+        )
+
+    # 4) Asistan cevabını kaydet
     _session_agent.update_context(
         session_id=message.session_id,
         role="assistant",
         content=final.content,
+        db=db,
+        new_state=new_state,
         topic=detected_topic,
+        message_type="answer",
+        llm_confidence=llm_confidence,
     )
 
     return final

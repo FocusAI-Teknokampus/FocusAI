@@ -14,7 +14,7 @@ class Settings(BaseSettings):
 
     # ── Uygulama ──────────────────────────────
     debug_mode: bool = True
-    app_name: str = "AI Mentor"
+    app_name: str = "FocusAI"
     app_version: str = "2.0.0"
 
     # ── LLM ───────────────────────────────────
@@ -22,10 +22,6 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o"
     openai_vision_model: str = "gpt-4o"          # Fotoğraf analizi için
     openai_embedding_model: str = "text-embedding-3-small"
-
-    # ── Database ───────────────────────────────────
-    database_url: str = "sqlite:///./data/focusai.db"
-    data_dir: str = "./data"
 
     # ── Kamera / CV Engine ────────────────────
     camera_id: int = 0

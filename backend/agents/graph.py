@@ -15,14 +15,9 @@
 #                                             ↓
 #                                        [response_node]
 #                                        LLM'e gönder, cevapla
-#
-# Sahip: K1
-# Bağımlılıklar: schemas.py, state_model.py, uncertainty_engine.py
-#                session_agent.py, mentor_agent.py (aşağıda yazılacak)
 
-from typing import TypedDict, Optional, Annotated
+from typing import TypedDict, Optional
 from langgraph.graph import StateGraph, END
-import operator
 
 from backend.core.schemas import (
     ChatMessage,
@@ -36,53 +31,68 @@ from backend.core.schemas import (
     UserState,
 )
 
+from backend.state.feature_extractor import FeatureExtractor
+from backend.state.state_model import StateModel
+from backend.state.uncertainty_engine import UncertaintyEngine
+from backend.agents.mentor_agent import MentorAgent
+
 
 # ─────────────────────────────────────────────────────────────────────
-# GRAPH STATE — node'lar arası taşınan veri paketi
-# Her node bu paketi alır, istediğini günceller, bir sonrakine geçer.
+# Tekil instance'lar
+# ─────────────────────────────────────────────────────────────────────
+# Neden?
+#   FeatureExtractor session bazlı sayaç tutuyor.
+#   UncertaintyEngine session bazlı cooldown tutuyor.
+#   Bunlar her request'te yeniden yaratılırsa hafızaları sıfırlanır.
+
+_feature_extractor = FeatureExtractor()
+_state_model = StateModel()
+_uncertainty_engine = UncertaintyEngine()
+_mentor_agent = MentorAgent()
+
+
+# ─────────────────────────────────────────────────────────────────────
+# GRAPH STATE
 # ─────────────────────────────────────────────────────────────────────
 
 class MentorGraphState(TypedDict):
-    # Gelen mesaj
     message: ChatMessage
 
-    # Session ve kullanıcı bağlamı
     session_context: Optional[ShortTermContext]
     user_profile: Optional[UserProfile]
 
-    # Analiz sonuçları
     feature_vector: Optional[FeatureVector]
     state_estimate: Optional[StateEstimate]
 
-    # Karar sonuçları
     should_intervene: bool
     intervention: Optional[MentorIntervention]
-    rag_context: Optional[str]          # Nottan bulunan ilgili içerik
+    rag_context: Optional[str]
 
-    # Final çıktı
     llm_response: Optional[str]
     final_response: Optional[ChatResponse]
 
-    # Hata yönetimi
     error: Optional[str]
 
 
 # ─────────────────────────────────────────────────────────────────────
-# NODE FONKSİYONLARI
-# Her node state'i alır, günceller, döner.
-# İçleri şu an için iskelet — agent'lar yazılınca dolacak.
+# NODE'LAR
 # ─────────────────────────────────────────────────────────────────────
 
 def session_node(state: MentorGraphState) -> dict:
     """
-    Oturum bağlamını yükler.
-    Session Agent buraya gelecek (session_agent.py).
-    Şimdilik: boş context döner.
+    Oturum bağlamını ve kullanıcı profilini yükler.
+
+    Burada:
+        - aktif session RAM'den okunur
+        - kullanıcı profili long-term memory'den alınır
     """
     from backend.agents.session_agent import SessionAgent
+
     agent = SessionAgent()
-    context = agent.load_context(state["message"].session_id)
-    profile = agent.load_profile(state["message"].user_id)
+    message = state["message"]
+
+    context = agent.load_context(message.session_id)
+    profile = agent.load_profile(message.user_id)
 
     return {
         "session_context": context,
@@ -92,22 +102,20 @@ def session_node(state: MentorGraphState) -> dict:
 
 def feature_node(state: MentorGraphState) -> dict:
     """
-    Ham mesajdan sinyal vektörü çıkarır.
-    FeatureExtractor (K3) buraya bağlanır.
-    Şimdilik: temel davranış sinyalleri.
+    Ham kullanıcı mesajından davranış sinyalleri çıkarır.
+
+    Önemli:
+        FeatureExtractor tekil instance'tır.
+        Böylece retry_count, idle_time ve topic geçmişi sıfırlanmaz.
     """
-    from backend.state.feature_extractor import FeatureExtractor
-    extractor = FeatureExtractor()
-
     msg = state["message"]
-    context = state.get("session_context")
 
-    feature = extractor.extract(
+    feature = _feature_extractor.extract(
         session_id=msg.session_id,
         message_content=msg.content,
         message_timestamp=msg.timestamp,
         channel=msg.channel,
-        camera_signal=None,             # Kamera sinyali Hafta 2'de buraya gelecek
+        camera_signal=None,   # Kamera sinyali daha sonra bağlanabilir
     )
 
     return {"feature_vector": feature}
@@ -115,16 +123,12 @@ def feature_node(state: MentorGraphState) -> dict:
 
 def state_node(state: MentorGraphState) -> dict:
     """
-    FeatureVector → StateEstimate.
-    StateModel burada çalışır.
+    FeatureVector'dan kullanıcı state tahmini üretir.
     """
-    from backend.state.state_model import StateModel
-    model = StateModel()
-
     profile = state.get("user_profile")
     threshold = profile.adaptive_threshold if profile else None
 
-    estimate = model.predict(
+    estimate = _state_model.predict(
         features=state["feature_vector"],
         adaptive_threshold=threshold,
     )
@@ -134,12 +138,13 @@ def state_node(state: MentorGraphState) -> dict:
 
 def uncertainty_node(state: MentorGraphState) -> dict:
     """
-    Müdahale edilmeli mi? Uncertainty Engine karar verir.
-    """
-    from backend.state.uncertainty_engine import UncertaintyEngine
-    engine = UncertaintyEngine()
+    Müdahale gerekip gerekmediğine karar verir.
 
-    intervention = engine.decide(
+    Önemli:
+        UncertaintyEngine tekil instance'tır.
+        Böylece session bazlı cooldown mekanizması çalışır.
+    """
+    intervention = _uncertainty_engine.decide(
         estimate=state["state_estimate"],
         profile=state.get("user_profile"),
         session_id=state["message"].session_id,
@@ -153,26 +158,24 @@ def uncertainty_node(state: MentorGraphState) -> dict:
 
 def mentor_node(state: MentorGraphState) -> dict:
     """
-    Müdahale gerekiyorsa Mentor Agent devreye girer.
-    LLM ile kişiselleştirilmiş müdahale mesajı üretir.
-    MentorAgent (mentor_agent.py) buraya gelecek.
+    Müdahale gerekiyorsa LLM ile müdahale metnini kişiselleştirir.
     """
-    from backend.agents.mentor_agent import MentorAgent
-    agent = MentorAgent()
+    intervention = state.get("intervention")
+    if intervention is None:
+        return {"intervention": None}
 
-    enriched_intervention = agent.enrich_intervention(
-        intervention=state["intervention"],
+    enriched = _mentor_agent.enrich_intervention(
+        intervention=intervention,
         user_profile=state.get("user_profile"),
         session_context=state.get("session_context"),
     )
 
-    return {"intervention": enriched_intervention}
+    return {"intervention": enriched}
 
 
 def clarify_node(state: MentorGraphState) -> dict:
     """
-    Confidence düşükse müdahale yerine açıklayıcı soru sor.
-    Örnek: "Şu an nasıl hissediyorsun, takıldığın bir yer var mı?"
+    Confidence düşükse doğrudan müdahale etmek yerine açıklayıcı soru sorar.
     """
     estimate = state.get("state_estimate")
     if not estimate:
@@ -180,57 +183,54 @@ def clarify_node(state: MentorGraphState) -> dict:
 
     question_map = {
         UserState.STUCK: "Takıldığın bir yer var gibi görünüyor — biraz daha anlatır mısın?",
-        UserState.FATIGUED: "Yorgun görünüyorsun, nasıl hissediyorsun?",
-        UserState.DISTRACTED: "Konsantrasyonun dağıldı mı, devam etmek ister misin?",
+        UserState.FATIGUED: "Biraz yorgun görünüyorsun. Kısa bir mola ister misin?",
+        UserState.DISTRACTED: "Dikkatin dağılmış olabilir. Devam etmek mi istersin, kısa bir toparlama mı yapalım?",
     }
 
     msg = question_map.get(estimate.state)
-    if msg:
-        clarifying = MentorIntervention(
-            intervention_type=InterventionType.QUESTION,
-            message=msg,
-            triggered_by=estimate.state,
-            confidence=estimate.confidence,
-        )
-        return {"intervention": clarifying, "should_intervene": True}
+    if msg is None:
+        return {}
 
-    return {}
+    clarifying = MentorIntervention(
+        intervention_type=InterventionType.QUESTION,
+        message=msg,
+        triggered_by=estimate.state,
+        confidence=estimate.confidence,
+    )
+
+    return {
+        "intervention": clarifying,
+        "should_intervene": True,
+    }
 
 
 def rag_node(state: MentorGraphState) -> dict:
     """
-    Kullanıcının notlarında ilgili içerik var mı arar.
-    RAGAgent burada çalışır.
- 
-    Kullanıcının indexlenmiş notu yoksa → None döner, LLM kendi bilgisiyle cevaplar.
-    Not varsa ve alakalı chunk bulunduysa → mentor_agent bu içeriği kullanır.
+    Kullanıcının yüklediği notlarda ilgili içerik arar.
     """
     from backend.rag.rag_agent import RAGAgent
- 
+
     agent = RAGAgent()
     message = state["message"]
- 
-    # Kullanıcının hiç notu yoksa direkt geç
+
     if not agent.has_notes(message.user_id):
         return {"rag_context": None}
- 
+
     result = agent.search(
         user_id=message.user_id,
         query=message.content,
     )
- 
-    return {"rag_context": result.source_chunk if result.found else None}
+
+    return {
+        "rag_context": result.source_chunk if result.found else None
+    }
 
 
 def response_node(state: MentorGraphState) -> dict:
     """
-    Tüm bağlamı LLM'e gönderir, final yanıtı üretir.
-    Dynamic Persona Prompt burada oluşturulur.
+    Tüm bağlamı kullanarak final mentor yanıtını üretir.
     """
-    from backend.agents.mentor_agent import MentorAgent
-    agent = MentorAgent()
-
-    response_text = agent.generate_response(
+    response_text = _mentor_agent.generate_response(
         message=state["message"],
         session_context=state.get("session_context"),
         user_profile=state.get("user_profile"),
@@ -244,7 +244,7 @@ def response_node(state: MentorGraphState) -> dict:
     final = ChatResponse(
         session_id=state["message"].session_id,
         content=response_text,
-        rag_source=None,                # RAG gelince burası dolacak
+        rag_source=None,
         mentor_intervention=state.get("intervention"),
         current_state=estimate.state if estimate else UserState.UNKNOWN,
     )
@@ -256,83 +256,61 @@ def response_node(state: MentorGraphState) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# ROUTING FONKSİYONLARI
-# Koşullu edge'ler: "buradan nereye git?"
+# ROUTING
 # ─────────────────────────────────────────────────────────────────────
 
 def route_after_uncertainty(state: MentorGraphState) -> str:
     """
-    Uncertainty Engine kararına göre yönlendir.
-
-    Müdahale gerekiyor + confidence yeterli → mentor_node
-    Müdahale gerekiyor + confidence düşük   → clarify_node
-    Müdahale gerekmez                        → rag_node (direkt cevapla)
+    uncertainty_node sonrasında hangi path'in izleneceğine karar verir.
     """
-    estimate = state.get("state_estimate")
     intervention = state.get("intervention")
+    estimate = state.get("state_estimate")
 
     if intervention is None:
         return "rag_node"
 
-    if intervention.intervention_type == InterventionType.QUESTION:
-        return "clarify_node"
+    # Confidence yeterliyse mentor müdahalesi zenginleştirilsin
+    if estimate and estimate.confidence >= 0.75:
+        return "mentor_node"
 
-    return "mentor_node"
+    # Confidence düşükse açıklayıcı soru
+    return "clarify_node"
 
 
 # ─────────────────────────────────────────────────────────────────────
 # GRAPH TANIMI
 # ─────────────────────────────────────────────────────────────────────
 
-def build_mentor_graph() -> StateGraph:
-    """
-    Graph'ı oluşturur ve döner.
-    Her uygulama başlangıcında bir kez çağrılır.
+graph = StateGraph(MentorGraphState)
 
-    Kullanım:
-        graph = build_mentor_graph()
-        app = graph.compile()
-        result = app.invoke(initial_state)
-    """
-    graph = StateGraph(MentorGraphState)
+graph.add_node("session_node", session_node)
+graph.add_node("feature_node", feature_node)
+graph.add_node("state_node", state_node)
+graph.add_node("uncertainty_node", uncertainty_node)
+graph.add_node("mentor_node", mentor_node)
+graph.add_node("clarify_node", clarify_node)
+graph.add_node("rag_node", rag_node)
+graph.add_node("response_node", response_node)
 
-    # Node'ları ekle
-    graph.add_node("session_node",     session_node)
-    graph.add_node("feature_node",     feature_node)
-    graph.add_node("state_node",       state_node)
-    graph.add_node("uncertainty_node", uncertainty_node)
-    graph.add_node("mentor_node",      mentor_node)
-    graph.add_node("clarify_node",     clarify_node)
-    graph.add_node("rag_node",         rag_node)
-    graph.add_node("response_node",    response_node)
+graph.set_entry_point("session_node")
 
-    # Sabit edge'ler (her zaman bu sıra)
-    graph.set_entry_point("session_node")
-    graph.add_edge("session_node",     "feature_node")
-    graph.add_edge("feature_node",     "state_node")
-    graph.add_edge("state_node",       "uncertainty_node")
+graph.add_edge("session_node", "feature_node")
+graph.add_edge("feature_node", "state_node")
+graph.add_edge("state_node", "uncertainty_node")
 
-    # Koşullu edge (uncertainty sonrası 3 yol)
-    graph.add_conditional_edges(
-        "uncertainty_node",
-        route_after_uncertainty,
-        {
-            "mentor_node":   "mentor_node",
-            "clarify_node":  "clarify_node",
-            "rag_node":      "rag_node",
-        }
-    )
+graph.add_conditional_edges(
+    "uncertainty_node",
+    route_after_uncertainty,
+    {
+        "mentor_node": "mentor_node",
+        "clarify_node": "clarify_node",
+        "rag_node": "rag_node",
+    },
+)
 
-    # Mentor ve clarify sonrası RAG'a git
-    graph.add_edge("mentor_node",  "rag_node")
-    graph.add_edge("clarify_node", "rag_node")
+graph.add_edge("mentor_node", "rag_node")
+graph.add_edge("clarify_node", "rag_node")
+graph.add_edge("rag_node", "response_node")
+graph.add_edge("response_node", END)
 
-    # RAG sonrası her zaman response
-    graph.add_edge("rag_node",     "response_node")
-    graph.add_edge("response_node", END)
-
-    return graph
-
-
-# Uygulama genelinde kullanılacak tekil instance
-mentor_graph = build_mentor_graph().compile()
+mentor_graph = graph.compile()
