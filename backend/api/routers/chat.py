@@ -20,6 +20,7 @@ from backend.core.schemas import ChatMessage, ChatResponse, UserState
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
 _session_agent = SessionAgent()
 
 
@@ -71,12 +72,17 @@ def chat(message: ChatMessage) -> ChatResponse:
     try:
         result = mentor_graph.invoke(initial_state)
     except Exception as exc:
-        # Graph içindeki herhangi bir hatayı yakala, 500 döndür.
-        # Prod'da bu log Sentry'ye vs. gidebilir.
         logger.exception("Graph çalıştırılırken hata oluştu: %s", exc)
         raise HTTPException(
             status_code=500,
             detail="Yanıt üretilirken bir sorun oluştu. Lütfen tekrar deneyin.",
+        )
+
+    final: ChatResponse | None = result.get("final_response")
+    if final is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Graph tamamlandı ancak yanıt üretilemedi.",
         )
 
     # ── 3. Yanıtı al ─────────────────────────────────────────────────
@@ -91,19 +97,26 @@ def chat(message: ChatMessage) -> ChatResponse:
 
     # ── 4. Session context'ini güncelle ──────────────────────────────
     # Kullanıcı mesajını ve asistan yanıtını geçmişe ekle.
+
     state_estimate = result.get("state_estimate")
+    feature_vector = result.get("feature_vector")
+
     new_state = state_estimate.state if state_estimate else None
+    detected_topic = feature_vector.topic if feature_vector and feature_vector.topic else None
 
     _session_agent.update_context(
         session_id=message.session_id,
         role="user",
         content=message.content,
         new_state=new_state,
+        topic=detected_topic,
     )
+
     _session_agent.update_context(
         session_id=message.session_id,
         role="assistant",
         content=final.content,
+        topic=detected_topic,
     )
 
     return final

@@ -1,99 +1,198 @@
-import React, { useEffect, useState } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { useFocusStore } from './store';
+import React, { useMemo, useRef, useEffect, useState } from "react";
+import { useFocusStore } from "./store";
+
+const stateColorMap: Record<string, string> = {
+  focused: "bg-green-100 text-green-700",
+  distracted: "bg-yellow-100 text-yellow-700",
+  fatigued: "bg-orange-100 text-orange-700",
+  stuck: "bg-red-100 text-red-700",
+  unknown: "bg-slate-100 text-slate-700",
+};
+
+const interventionStyleMap: Record<string, string> = {
+  hint: "border-blue-200 bg-blue-50 text-blue-800",
+  break: "border-green-200 bg-green-50 text-green-800",
+  strategy: "border-purple-200 bg-purple-50 text-purple-800",
+  question: "border-orange-200 bg-orange-50 text-orange-800",
+  mode_switch: "border-indigo-200 bg-indigo-50 text-indigo-800",
+  none: "border-slate-200 bg-slate-50 text-slate-800",
+};
 
 export default function App() {
-  const { scores, addScore } = useFocusStore();
-  const [streak, setStreak] = useState(12); // Örnek: 12 dakikadır odaklı
-  const [goalProgress, setGoalProgress] = useState(65); // Örnek: Hedefin %65'i tamam
+  const {
+    userId,
+    topic,
+    sessionId,
+    messages,
+    currentState,
+    isLoading,
+    error,
+    sessionSummary,
+    setUserId,
+    setTopic,
+    startSession,
+    sendMessage,
+    endSession,
+    clearError,
+  } = useFocusStore();
+
+  const [draft, setDraft] = useState("");
+  const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      addScore(Math.floor(Math.random() * 25) + 70);
-    }, 2000);
-    return () => clearInterval(interval);
-  }, [addScore]);
+    listRef.current?.scrollTo({
+      top: listRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [messages]);
 
-  // Tasarım Ayarları
-  const containerStyle: React.CSSProperties = { backgroundColor: '#f8fafc', minHeight: '100vh', padding: '40px', fontFamily: 'sans-serif', color: '#1e293b' };
-  const cardStyle: React.CSSProperties = { backgroundColor: 'white', borderRadius: '30px', padding: '25px', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', border: '1px solid #e2e8f0' };
-  const accentCardStyle: React.CSSProperties = { background: 'linear-gradient(135deg, #4f46e5 0%, #2563eb 100%)', borderRadius: '30px', padding: '25px', color: 'white', boxShadow: '0 10px 15px -3px rgba(37, 99, 235, 0.2)' };
+  const canSend = !!sessionId && draft.trim().length > 0 && !isLoading;
+
+  const handleStart = async () => {
+    await startSession(userId, topic, false);
+  };
+
+  const handleSend = async () => {
+    if (!canSend) return;
+    const text = draft.trim();
+    setDraft("");
+    await sendMessage(text);
+  };
 
   return (
-    <div style={containerStyle}>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '40px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-          <div style={{ backgroundColor: '#2563eb', padding: '10px', borderRadius: '12px', color: 'white' }}>🧠</div>
-          <h1 style={{ fontSize: '24px', fontWeight: '900', margin: 0 }}>FocusAI</h1>
-        </div>
-        {/* Odak Serisi Ateşi */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#fff', padding: '10px 20px', borderRadius: '50px', boxShadow: '0 2px 5px rgba(0,0,0,0.05)', border: '1px solid #e2e8f0' }}>
-          <span style={{ fontSize: '20px' }}>🔥</span>
-          <span style={{ fontWeight: 'bold', color: '#f59e0b' }}>{streak} Dakika Odak Serisi!</span>
-        </div>
-      </header>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '30px' }}>
-        
-        {/* SOL KOLON */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '25px' }}>
-          {/* Grafik */}
-          <div style={cardStyle}>
-            <h2 style={{ fontSize: '14px', color: '#94a3b8', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '20px' }}>📈 Odak Yolculuğum</h2>
-            <div style={{ height: '300px', width: '100%' }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={scores}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                  <XAxis dataKey="time" hide />
-                  <YAxis domain={[0, 100]} stroke="#cbd5e1" fontSize={12} />
-                  <Tooltip contentStyle={{ borderRadius: '15px', border: 'none' }} />
-                  <Line type="monotone" dataKey="value" stroke="#2563eb" strokeWidth={5} dot={false} isAnimationActive={false} />
-                </LineChart>
-              </ResponsiveContainer>
+    <div className="min-h-screen bg-slate-50 text-slate-900">
+      <div className="mx-auto max-w-5xl p-6">
+        <div className="mb-6 rounded-3xl bg-white p-5 shadow-sm border">
+          <div className="flex flex-col gap-4 md:flex-row md:items-end">
+            <div className="flex-1">
+              <label className="mb-1 block text-sm font-medium">Kullanıcı ID</label>
+              <input
+                value={userId}
+                onChange={(e) => setUserId(e.target.value)}
+                className="w-full rounded-xl border px-4 py-3"
+                placeholder="user_001"
+              />
             </div>
+
+            <div className="flex-1">
+              <label className="mb-1 block text-sm font-medium">Konu</label>
+              <input
+                value={topic}
+                onChange={(e) => setTopic(e.target.value)}
+                className="w-full rounded-xl border px-4 py-3"
+                placeholder="Bugün ne çalışıyorum?"
+              />
+            </div>
+
+            {!sessionId ? (
+              <button
+                onClick={handleStart}
+                disabled={isLoading || !userId.trim()}
+                className="rounded-xl bg-blue-600 px-5 py-3 font-semibold text-white disabled:opacity-50"
+              >
+                Oturum Başlat
+              </button>
+            ) : (
+              <button
+                onClick={endSession}
+                disabled={isLoading}
+                className="rounded-xl bg-red-600 px-5 py-3 font-semibold text-white disabled:opacity-50"
+              >
+                Oturumu Kapat
+              </button>
+            )}
           </div>
 
-          {/* Günün Hedefi Progress Bar */}
-          <div style={cardStyle}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
-              <span style={{ fontWeight: 'bold', fontSize: '14px' }}>Günün Hedefi</span>
-              <span style={{ color: '#2563eb', fontWeight: 'bold' }}>%{goalProgress}</span>
+          {sessionId && (
+            <div className="mt-4 flex items-center gap-3">
+              <span className="text-sm text-slate-500">Session:</span>
+              <code className="rounded bg-slate-100 px-2 py-1 text-sm">{sessionId}</code>
+              <span className={`rounded-full px-3 py-1 text-xs font-semibold ${stateColorMap[currentState]}`}>
+                {currentState.toUpperCase()}
+              </span>
             </div>
-            <div style={{ width: '100%', height: '12px', backgroundColor: '#f1f5f9', borderRadius: '10px', overflow: 'hidden' }}>
-              <div style={{ width: `${goalProgress}%`, height: '100%', backgroundColor: '#2563eb', transition: 'width 0.5s ease-in-out' }}></div>
-            </div>
-            <p style={{ fontSize: '12px', color: '#64748b', marginTop: '10px' }}>Bugünkü 2 saatlik odaklanma hedefine çok yaklaştın!</p>
-          </div>
-        </div>
-
-        {/* SAĞ KOLON */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '25px' }}>
-          <div style={accentCardStyle}>
-            <h3 style={{ fontSize: '12px', fontWeight: 'bold', opacity: 0.8, textTransform: 'uppercase', marginBottom: '15px' }}>✨ Senin Odak Koçun</h3>
-            <p style={{ fontSize: '18px', fontWeight: '500', lineHeight: '1.5' }}>
-              "Müthiş gidiyorsun! Son 10 dakikadır gözlerini ekrandan ayırmadın. Böyle devam edersen bugün 'Odak Şampiyonu' rozetini alabilirsin!"
-            </p>
-          </div>
-
-          <div style={{ ...cardStyle, textAlign: 'center' }}>
-            <div style={{ fontSize: '48px', fontWeight: '900', color: '#2563eb' }}>
-              %{scores.length > 0 ? scores[scores.length - 1].value : '--'}
-            </div>
-            <div style={{ fontSize: '12px', color: '#64748b', fontWeight: 'bold' }}>ANLIK ODAK PUANIN</div>
-          </div>
-
-          {/* Yeni Rozet Kutusu */}
-          <div style={{ ...cardStyle, textAlign: 'center', backgroundColor: '#f0f9ff', borderColor: '#bae6fd' }}>
-            <div style={{ fontSize: '30px' }}>🏅</div>
-            <div style={{ fontWeight: 'bold', color: '#0369a1', fontSize: '14px' }}>Kazanılan Rozetler</div>
-            <div style={{ display: 'flex', justifyContent: 'center', gap: '10px', marginTop: '10px' }}>
-              <span title="Erken Kuş">🌅</span>
-              <span title="Derin Odak">🌊</span>
-              <span title="Haftalık Seri">💎</span>
-            </div>
-          </div>
+          )}
         </div>
 
+        {error && (
+          <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-red-700 flex items-center justify-between">
+            <span>{error}</span>
+            <button onClick={clearError} className="text-sm underline">Kapat</button>
+          </div>
+        )}
+
+        <div className="rounded-3xl border bg-white shadow-sm">
+          <div
+            ref={listRef}
+            className="h-[500px] overflow-y-auto p-4 flex flex-col gap-4"
+          >
+            {messages.length === 0 && (
+              <div className="text-sm text-slate-500">
+                Oturum başlatıp ilk mesajını gönder.
+              </div>
+            )}
+
+            {messages.map((msg) => (
+              <div key={msg.id} className="space-y-2">
+                <div className={`max-w-[80%] rounded-2xl px-4 py-3 ${
+                  msg.role === "user"
+                    ? "ml-auto bg-blue-600 text-white"
+                    : "bg-slate-100 text-slate-900"
+                }`}>
+                  <div className="whitespace-pre-wrap">{msg.content}</div>
+                </div>
+
+                {msg.role === "assistant" && msg.currentState && (
+                  <div className={`inline-block rounded-full px-3 py-1 text-xs font-semibold ${stateColorMap[msg.currentState]}`}>
+                    Durum: {msg.currentState.toUpperCase()}
+                  </div>
+                )}
+
+                {msg.role === "assistant" && msg.mentorIntervention && (
+                  <div className={`max-w-[80%] rounded-2xl border px-4 py-3 text-sm ${
+                    interventionStyleMap[msg.mentorIntervention.intervention_type]
+                  }`}>
+                    <div className="mb-1 font-semibold">
+                      Müdahale: {msg.mentorIntervention.intervention_type}
+                    </div>
+                    <div>{msg.mentorIntervention.message}</div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div className="border-t p-4 flex gap-3">
+            <input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              disabled={!sessionId || isLoading}
+              className="flex-1 rounded-2xl border px-4 py-3"
+              placeholder={sessionId ? "Mesajını yaz..." : "Önce oturum başlat"}
+            />
+            <button
+              onClick={handleSend}
+              disabled={!canSend}
+              className="rounded-2xl bg-slate-900 px-5 py-3 font-semibold text-white disabled:opacity-50"
+            >
+              Gönder
+            </button>
+          </div>
+        </div>
+
+        {sessionSummary && (
+          <div className="mt-6 rounded-3xl border bg-white p-5 shadow-sm">
+            <h2 className="mb-3 text-lg font-bold">Oturum Özeti</h2>
+            <p>Yazılan hafıza kaydı: {sessionSummary.memory_entries_written}</p>
+            <p>İşlenen konular: {sessionSummary.topics_covered.join(", ") || "Yok"}</p>
+          </div>
+        )}
       </div>
     </div>
   );
