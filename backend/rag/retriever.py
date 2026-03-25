@@ -171,26 +171,28 @@ class FAISSRetriever:
         return self._get_index_path(user_id).exists()
 
 
-    def get_all_filenames(self, user_id: str) -> list[str]:
+   def get_all_filenames(self, user_id: str) -> list[str]:
     """
     FAISS index'indeki tüm benzersiz dosya adlarını döner.
     Dashboard'da 'yüklediğin notlar: türev.pdf, integral.pdf' için.
     """
-    index_path = self._get_index_path(user_id)
-    if not index_path.exists():
-        return []
-    try:
-        index = FAISS.load_local(
-            str(index_path), self.embeddings,
-            allow_dangerous_deserialization=True,
+        index_path = self._get_index_path(user_id)
+        if not index_path.exists():
+            return []
+
+        try:
+            index = FAISS.load_local(
+                str(index_path),
+                self.embeddings,
+                allow_dangerous_deserialization=True,
         )
         # FAISS'in iç store'undan metadata'yı çek
-        filenames = set()
-        for doc_id in index.docstore._dict:
-            doc = index.docstore._dict[doc_id]
-            fname = doc.metadata.get("filename")
-            if fname:
-                filenames.add(fname)
-        return list(filenames)
-    except Exception:
-        return []
+            filenames = set()
+            for doc_id in index.docstore._dict:
+                doc = index.docstore._dict[doc_id]
+                fname = doc.metadata.get("filename")
+                if fname:
+                    filenames.add(fname)
+            return list(filenames)
+        except Exception:
+            return []
