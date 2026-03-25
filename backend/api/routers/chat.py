@@ -53,6 +53,7 @@ def chat(
         "should_intervene": False,
         "intervention": None,
         "rag_context": None,
+        "rag_source": None,
         "llm_response": None,
         "final_response": None,
         "error": None,

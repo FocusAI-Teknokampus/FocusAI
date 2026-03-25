@@ -97,9 +97,10 @@ class BehaviorService:
             UserState.STUCK: 0.40,
             UserState.DISTRACTED: 0.25,
             UserState.FATIGUED: 0.20,
-            UserState.RECOVERING: 0.65,
         }
 
+        # State model su an yalnizca schema icindeki tanimli durumlari uretiyor.
+        # Tanimsiz bir enum uyesine referans vermek analiz kaydi sirasinda runtime hata olusturuyordu.
         base = base_map.get(estimate.state, 0.50)
         conf = estimate.confidence or 0.0
 

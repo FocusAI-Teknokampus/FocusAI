@@ -29,6 +29,7 @@ export default function App() {
     scores,
     stats,
     sessionSummary,
+    dashboard,
     isLoading,
     isSessionLoading,
     error,
@@ -42,19 +43,17 @@ export default function App() {
   } = useFocusStore();
 
   const [input, setInput] = useState('');
-  const [isCameraOpen, setIsCameraOpen] = useState(false);
-  const [cameraFrame] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
 
   const dailyQuotes = [
-    'Pazartesi: Başlamak için mükemmel olmana gerek yok, ama mükemmel olmak için başlaman gerek.',
-    'Salı: Bugün yapacağın küçük bir çalışma, yarınki büyük başarın için bir adımdır.',
-    'Çarşamba: Zihnini odakla, sınırlarını zorla. Başarı odaklandığın yerdedir.',
-    'Perşembe: Zorluklar, başarıyı daha tatlı kılan basamaklardır. Devam et!',
-    'Cuma: Haftayı güçlü bitir! Unutma; disiplin, hedeflerle başarı arasındaki köprüdür.',
-    'Cumartesi: Bugün kendine bir yatırım yap ve öğrenmeye devam et.',
-    'Pazar: Yarının kazananı, bugün vazgeçmeyen kişidir.',
+    'Pazartesi: Baslamak icin mukemmel olmana gerek yok, ama mukemmel olmak icin baslaman gerek.',
+    'Sali: Bugun yapacagin kucuk bir calisma, yarinki buyuk basarin icin bir adimdir.',
+    'Carsamba: Zihnini odakla, sinirlarini zorla. Basari odaklandigin yerdedir.',
+    'Persembe: Zorluklar, basariyi daha tatli kilan basamaklardir. Devam et.',
+    'Cuma: Haftayi guclu bitir. Disiplin, hedeflerle basari arasindaki koprudur.',
+    'Cumartesi: Bugun kendine bir yatirim yap ve ogrenmeye devam et.',
+    'Pazar: Yarinin kazanani, bugun vazgecmeyen kisidir.',
   ];
 
   const dayIndex = new Date().getDay();
@@ -102,6 +101,15 @@ export default function App() {
     [currentState]
   );
 
+  const dashboardState = dashboard?.current_state ?? 'unknown';
+  const dashboardBadgeColor = stateColorMap[dashboardState] || '#64748b';
+  const dashboardFocusPercent =
+    dashboard?.focus_score != null ? `%${Math.round(dashboard.focus_score * 100)}` : 'Yok';
+  const displayedTopics =
+    dashboard?.topics_covered && dashboard.topics_covered.length > 0
+      ? dashboard.topics_covered
+      : sessionSummary?.topics_covered ?? [];
+
   return (
     <div
       style={{
@@ -136,25 +144,20 @@ export default function App() {
           FocusAI <span style={{ color: '#3b82f6' }}>Assistant</span>
         </h1>
 
-        <button
-          onClick={() => setIsCameraOpen(!isCameraOpen)}
+        <div
           style={{
-            backgroundColor: isCameraOpen ? '#ef4444' : '#ffffff',
-            color: isCameraOpen ? 'white' : '#1e293b',
-            border: '1px solid #e2e8f0',
-            padding: '8px 16px',
+            backgroundColor: '#fff7ed',
+            color: '#9a3412',
+            border: '1px solid #fdba74',
+            padding: '8px 14px',
             borderRadius: '10px',
-            cursor: 'pointer',
             fontWeight: 600,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
+            fontSize: '13px',
             marginLeft: '10px',
           }}
         >
-          {isCameraOpen ? '✕ Kapat' : '📷 Camera Analysis'}
-        </button>
+          Kamera analizi gecici olarak askida
+        </div>
       </header>
 
       {error && (
@@ -224,7 +227,7 @@ export default function App() {
                 flexWrap: 'wrap',
               }}
             >
-              <h3 style={{ margin: 0, fontSize: '16px' }}>🤖 AI Chatbox (RAG)</h3>
+              <h3 style={{ margin: 0, fontSize: '16px' }}>AI Chatbox (RAG)</h3>
 
               <div
                 style={{
@@ -252,7 +255,7 @@ export default function App() {
               <input
                 value={userId}
                 onChange={(e) => setUserId(e.target.value)}
-                placeholder="Kullanıcı ID"
+                placeholder="Kullanici ID"
                 disabled={!!sessionId || isSessionLoading}
                 style={{
                   padding: '12px 14px',
@@ -265,7 +268,7 @@ export default function App() {
               <input
                 value={topic}
                 onChange={(e) => setTopic(e.target.value)}
-                placeholder="Bugün hangi konuyu çalışacaksın?"
+                placeholder="Bugun hangi konuyu calisacaksin?"
                 disabled={!!sessionId || isSessionLoading}
                 style={{
                   padding: '12px 14px',
@@ -292,8 +295,8 @@ export default function App() {
                 {isSessionLoading
                   ? 'Bekleyin...'
                   : sessionId
-                  ? 'Oturumu Kapat'
-                  : 'Oturum Başlat'}
+                    ? 'Oturumu Kapat'
+                    : 'Oturum Baslat'}
               </button>
 
               <button
@@ -309,7 +312,7 @@ export default function App() {
                   fontWeight: 'bold',
                 }}
               >
-                PDF Yükle
+                PDF Yukle
               </button>
 
               <input
@@ -322,7 +325,7 @@ export default function App() {
             </div>
 
             <div style={{ fontSize: '13px', color: '#64748b' }}>
-              Session: {sessionId || 'Henüz yok'}
+              Session: {sessionId || 'Henuz yok'}
             </div>
           </div>
 
@@ -380,6 +383,24 @@ export default function App() {
                   </div>
                 )}
 
+                {m.role === 'ai' && m.ragSource && (
+                  <div
+                    style={{
+                      alignSelf: 'flex-start',
+                      backgroundColor: '#ecfeff',
+                      color: '#155e75',
+                      border: '1px solid #a5f3fc',
+                      padding: '8px 10px',
+                      borderRadius: '12px',
+                      fontSize: '12px',
+                      lineHeight: '1.5',
+                    }}
+                  >
+                    <strong>Not kaynagi: </strong>
+                    {m.ragSource}
+                  </div>
+                )}
+
                 {m.role === 'ai' && m.mentorIntervention && (
                   <div
                     style={{
@@ -393,7 +414,7 @@ export default function App() {
                       lineHeight: '1.5',
                     }}
                   >
-                    <strong>Müdahale ({m.mentorIntervention.intervention_type}): </strong>
+                    <strong>Mudahale ({m.mentorIntervention.intervention_type}): </strong>
                     {m.mentorIntervention.message}
                   </div>
                 )}
@@ -414,7 +435,7 @@ export default function App() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-              placeholder={sessionId ? 'Mesajınızı yazın...' : 'Önce oturum başlat'}
+              placeholder={sessionId ? 'Mesajinizi yazin...' : 'Once oturum baslatin'}
               disabled={!sessionId || isLoading || isSessionLoading}
               style={{
                 flex: 1,
@@ -439,7 +460,7 @@ export default function App() {
                   !sessionId || isLoading || isSessionLoading || !input.trim() ? 0.6 : 1,
               }}
             >
-              {isLoading ? 'Gönderiliyor...' : 'Gönder'}
+              {isLoading ? 'Gonderiliyor...' : 'Gonder'}
             </button>
           </div>
         </div>
@@ -462,9 +483,9 @@ export default function App() {
                 marginBottom: '10px',
               }}
             >
-              <span style={{ fontSize: '20px' }}>⭐</span>
+              <span style={{ fontSize: '20px' }}>*</span>
               <h4 style={{ margin: 0, fontSize: '13px', letterSpacing: '0.5px' }}>
-                GÜNÜN MOTİVASYON SÖZÜ
+                GUNUN MOTIVASYON SOZU
               </h4>
             </div>
             <p
@@ -495,7 +516,7 @@ export default function App() {
                 color: '#64748b',
               }}
             >
-              GÜNLÜK VERİMLİLİK
+              GUNLUK VERIMLILIK
             </h4>
             <div
               style={{
@@ -512,7 +533,7 @@ export default function App() {
                     color: '#1e293b',
                   }}
                 >
-                  {stats.totalTime}
+                  {dashboard ? `${dashboard.message_count * 2} dk` : stats.totalTime}
                 </div>
                 <div style={{ fontSize: '11px', color: '#94a3b8' }}>Toplam Odak</div>
               </div>
@@ -524,9 +545,9 @@ export default function App() {
                     color: '#10b981',
                   }}
                 >
-                  {stats.avgSuccess}
+                  {dashboard ? dashboardFocusPercent : stats.avgSuccess}
                 </div>
-                <div style={{ fontSize: '11px', color: '#94a3b8' }}>Ort. Başarı</div>
+                <div style={{ fontSize: '11px', color: '#94a3b8' }}>Ort. Basari</div>
               </div>
             </div>
           </div>
@@ -550,7 +571,7 @@ export default function App() {
               }}
             >
               <h4 style={{ margin: 0, fontSize: '12px', color: '#64748b' }}>
-                CANLI ODAK ANALİZİ
+                CANLI ODAK ANALIZI
               </h4>
               <span
                 style={{
@@ -588,16 +609,78 @@ export default function App() {
             }}
           >
             <h4 style={{ margin: '0 0 12px 0', fontSize: '15px', color: '#1e293b' }}>
-              Oturum Özeti
+              Oturum Ozeti
             </h4>
 
-            {sessionSummary ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {dashboard ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div
+                  style={{
+                    alignSelf: 'flex-start',
+                    backgroundColor: '#f8fafc',
+                    color: dashboardBadgeColor,
+                    border: `1px solid ${dashboardBadgeColor}`,
+                    padding: '6px 10px',
+                    borderRadius: '999px',
+                    fontSize: '12px',
+                    fontWeight: 700,
+                  }}
+                >
+                  Son durum: {stateLabelMap[dashboardState]}
+                </div>
+
                 <div style={{ fontSize: '14px', color: '#334155' }}>
-                  Yazılan hafıza kaydı: <strong>{sessionSummary.memory_entries_written}</strong>
+                  Mesaj sayisi: <strong>{dashboard.message_count}</strong>
                 </div>
                 <div style={{ fontSize: '14px', color: '#334155' }}>
-                  İşlenen konular:{' '}
+                  Retry sayisi: <strong>{dashboard.retry_count}</strong>
+                </div>
+                <div style={{ fontSize: '14px', color: '#334155' }}>
+                  Mudahale sayisi: <strong>{dashboard.intervention_count}</strong>
+                </div>
+                <div style={{ fontSize: '14px', color: '#334155' }}>
+                  Ortalama odak: <strong>{dashboardFocusPercent}</strong>
+                </div>
+
+                {sessionSummary && (
+                  <div style={{ fontSize: '14px', color: '#334155' }}>
+                    Yazilan hafiza kaydi: <strong>{sessionSummary.memory_entries_written}</strong>
+                  </div>
+                )}
+
+                <div style={{ fontSize: '14px', color: '#334155' }}>
+                  Islenen konular:{' '}
+                  <strong>{displayedTopics.length > 0 ? displayedTopics.join(', ') : 'Yok'}</strong>
+                </div>
+
+                <div style={{ fontSize: '12px', color: '#64748b' }}>
+                  Veri kaynagi: {dashboard.source || 'bilinmiyor'}
+                </div>
+
+                {dashboard.summary_text && (
+                  <div
+                    style={{
+                      backgroundColor: '#f8fafc',
+                      color: '#334155',
+                      borderRadius: '14px',
+                      padding: '12px',
+                      fontSize: '13px',
+                      lineHeight: '1.6',
+                    }}
+                  >
+                    {/* Dashboard raporunu ayri blokta gosteriyoruz.
+                        Boylece kullanici sadece sayilari degil, backend'in urettigi metin ozeti de goruyor. */}
+                    {dashboard.summary_text}
+                  </div>
+                )}
+              </div>
+            ) : sessionSummary ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ fontSize: '14px', color: '#334155' }}>
+                  Yazilan hafiza kaydi: <strong>{sessionSummary.memory_entries_written}</strong>
+                </div>
+                <div style={{ fontSize: '14px', color: '#334155' }}>
+                  Islenen konular:{' '}
                   <strong>
                     {sessionSummary.topics_covered?.length > 0
                       ? sessionSummary.topics_covered.join(', ')
@@ -607,61 +690,12 @@ export default function App() {
               </div>
             ) : (
               <div style={{ fontSize: '13px', color: '#64748b' }}>
-                Oturumu kapattığında yazılan hafıza sayısı ve işlenen konular burada görünecek.
+                Dashboard verisi her mesajdan sonra ve oturum kapandiginda burada guncellenecek.
               </div>
             )}
           </div>
         </div>
       </div>
-
-      {isCameraOpen && (
-        <div
-          style={{
-            position: 'fixed',
-            bottom: '30px',
-            right: '30px',
-            width: '300px',
-            backgroundColor: '#1e293b',
-            borderRadius: '20px',
-            padding: '10px',
-            boxShadow: '0 20px 25px -5px rgba(0,0,0,0.3)',
-            zIndex: 1000,
-            border: '2px solid #3b82f6',
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              color: 'white',
-              marginBottom: '8px',
-              fontSize: '12px',
-            }}
-          >
-            <span>🔵 Canlı AI Analiz</span>
-            <button
-              onClick={() => setIsCameraOpen(false)}
-              style={{
-                color: 'white',
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-              }}
-            >
-              ✕
-            </button>
-          </div>
-          <img
-            src={
-              cameraFrame
-                ? `data:image/jpeg;base64,${cameraFrame}`
-                : 'https://via.placeholder.com/300x220/1e293b/ffffff?text=Kamera+Modulu+Asama+3'
-            }
-            style={{ width: '100%', borderRadius: '12px' }}
-            alt="AI Stream"
-          />
-        </div>
-      )}
     </div>
   );
 }

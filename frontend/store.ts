@@ -51,6 +51,29 @@ interface DashboardResponse {
   topics_covered: string[];
   current_state: UserState;
   retry_count: number;
+  intervention_count: number;
+  focus_score: number | null;
+  summary_text: string | null;
+  source?: string | null;
+}
+
+interface DashboardApiResponse {
+  session_id: string;
+  user_id: string;
+  topic?: string | null;
+  current_state?: string | null;
+  intervention_count?: number;
+  average_focus_score?: number | null;
+  source?: string | null;
+  retry_count?: number;
+  report?: {
+    message_count?: number;
+    topics_covered?: string[];
+    retry_count?: number;
+    intervention_count?: number;
+    focus_score?: number | null;
+    summary_text?: string | null;
+  };
 }
 
 interface UploadResponse {
@@ -66,6 +89,7 @@ export interface ChatMessageUI {
   text: string;
   currentState?: UserState;
   mentorIntervention?: MentorIntervention | null;
+  ragSource?: string | null;
   timestamp?: string;
 }
 
@@ -91,11 +115,11 @@ interface FocusState {
   clearError: () => void;
 
   addScore: (score: number) => void;
-  startSession: () => Promise<void>;
+  startSession: (cameraEnabled?: boolean) => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
   endSession: () => Promise<void>;
   uploadPdf: (file: File) => Promise<void>;
-  fetchDashboard: () => Promise<void>;
+  fetchDashboard: (targetSessionId?: string) => Promise<void>;
 }
 
 async function parseError(res: Response): Promise<string> {
@@ -131,6 +155,26 @@ function calcAvgSuccess(scores: { value: number; time: string }[]) {
 
 function calcTotalTime(messageCount: number) {
   return `${messageCount * 2} dk`;
+}
+
+function mapDashboardResponse(data: DashboardApiResponse): DashboardResponse {
+  // Backend daha zengin ve nested bir dashboard modeli donuyor.
+  // Frontend bu ekranda yalnizca temel ozet alanlarini kullandigi icin
+  // burada tek bir ceviri noktasi olusturuyoruz.
+  return {
+    session_id: data.session_id,
+    user_id: data.user_id,
+    topic: data.topic ?? null,
+    message_count: data.report?.message_count ?? 0,
+    topics_covered: data.report?.topics_covered ?? [],
+    current_state: toUiState(data.current_state),
+    retry_count: data.report?.retry_count ?? data.retry_count ?? 0,
+    intervention_count:
+      data.report?.intervention_count ?? data.intervention_count ?? 0,
+    focus_score: data.report?.focus_score ?? data.average_focus_score ?? null,
+    summary_text: data.report?.summary_text ?? null,
+    source: data.source ?? null,
+  };
 }
 
 export const useFocusStore = create<FocusState>((set, get) => ({
@@ -183,7 +227,7 @@ export const useFocusStore = create<FocusState>((set, get) => ({
       };
     }),
 
-  startSession: async () => {
+  startSession: async (cameraEnabled = false) => {
     const { userId, topic } = get();
 
     if (!userId.trim()) {
@@ -195,6 +239,7 @@ export const useFocusStore = create<FocusState>((set, get) => ({
       isSessionLoading: true,
       error: null,
       sessionSummary: null,
+      dashboard: null,
     });
 
     try {
@@ -204,7 +249,9 @@ export const useFocusStore = create<FocusState>((set, get) => ({
         body: JSON.stringify({
           user_id: userId.trim(),
           topic: topic.trim() || null,
-          camera_enabled: false,
+          // Kullanici tercihini backend'e gonderiyoruz.
+          // Boylesiyle session kaydi kamera kullanildi bilgisini dogru tutar.
+          camera_enabled: cameraEnabled,
         }),
       });
 
@@ -313,6 +360,7 @@ export const useFocusStore = create<FocusState>((set, get) => ({
         text: data.content,
         currentState: nextState,
         mentorIntervention: data.mentor_intervention ?? null,
+        ragSource: data.rag_source ?? null,
         timestamp: data.timestamp,
       };
 
@@ -327,6 +375,10 @@ export const useFocusStore = create<FocusState>((set, get) => ({
           avgSuccess: calcAvgSuccess(nextScores),
         },
       }));
+
+      // Dashboard endpoint'i aktif oturumda RAM fallback kullandigi icin
+      // her mesajdan sonra sag paneldeki ozet verileri guncel kalir.
+      await get().fetchDashboard(sessionId);
     } catch (err) {
       set({
         error: err instanceof Error ? err.message : 'Mesaj gönderilemedi.',
@@ -373,6 +425,10 @@ export const useFocusStore = create<FocusState>((set, get) => ({
       }
 
       const data: SessionEndResponse = await res.json();
+
+      // Session kapanir kapanmaz rapor DB tarafinda olusuyor.
+      // sessionId temizlenmeden ayni oturumun dashboard verisini cekiyoruz.
+      await get().fetchDashboard(sessionId);
 
       set({
         sessionSummary: data,
@@ -427,17 +483,18 @@ export const useFocusStore = create<FocusState>((set, get) => ({
     }
   },
 
-  fetchDashboard: async () => {
+  fetchDashboard: async (targetSessionId) => {
     const { sessionId } = get();
+    const activeSessionId = targetSessionId ?? sessionId;
 
-    if (!sessionId) return;
+    if (!activeSessionId) return;
 
     try {
-      const res = await fetch(`${API_BASE}/dashboard/${sessionId}`);
+      const res = await fetch(`${API_BASE}/dashboard/${activeSessionId}`);
       if (!res.ok) return;
 
-      const data: DashboardResponse = await res.json();
-      set({ dashboard: data });
+      const data: DashboardApiResponse = await res.json();
+      set({ dashboard: mapDashboardResponse(data) });
     } catch {
       // sessiz geç
     }

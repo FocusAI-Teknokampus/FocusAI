@@ -19,7 +19,7 @@ from backend.memory.short_term import ShortTermMemory, _sessions as _active_sess
 from backend.memory.long_term import LongTermMemory
 from backend.services.session_service import SessionService
 from backend.services.analytics_service import AnalyticsService
-from backend.core.database import UserProfileRecord
+from backend.core.database import SessionLocal, UserProfileRecord
 
 
 class SessionAgent:
@@ -132,6 +132,9 @@ class SessionAgent:
             UserProfile
         """
         # 1) Önce long-term memory dene
+        owns_session = db is None
+        active_db = db or SessionLocal()
+
         try:
             profile = self.long_term.get_profile(user_id)
             if profile:
@@ -140,9 +143,11 @@ class SessionAgent:
             pass
 
         # 2) DB fallback
-        if db is not None:
+        # Graph iÃ§inden gelen Ã§aÄŸrÄ±lar her zaman request DB session'i taÅŸÄ±mÄ±yor.
+        # Bu nedenle burada kontrollÃ¼ bir local session aÃ§Ä±p profilin gerÃ§ekten okunmasÄ±nÄ± saÄŸlÄ±yoruz.
+        try:
             row = (
-                db.query(UserProfileRecord)
+                active_db.query(UserProfileRecord)
                 .filter(UserProfileRecord.user_id == user_id)
                 .first()
             )
@@ -159,6 +164,9 @@ class SessionAgent:
                     total_sessions=0,
                     last_session_at=None,
                 )
+        finally:
+            if owns_session:
+                active_db.close()
 
         # 3) Varsayılan fallback
         return UserProfile(user_id=user_id)

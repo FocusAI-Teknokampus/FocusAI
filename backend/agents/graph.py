@@ -67,6 +67,7 @@ class MentorGraphState(TypedDict):
     should_intervene: bool
     intervention: Optional[MentorIntervention]
     rag_context: Optional[str]
+    rag_source: Optional[str]
 
     llm_response: Optional[str]
     final_response: Optional[ChatResponse]
@@ -214,15 +215,21 @@ def rag_node(state: MentorGraphState) -> dict:
     message = state["message"]
 
     if not agent.has_notes(message.user_id):
-        return {"rag_context": None}
+        return {
+            "rag_context": None,
+            "rag_source": None,
+        }
 
     result = agent.search(
         user_id=message.user_id,
         query=message.content,
     )
 
+    # RAG bulunduysa hem LLM'e gidecek metni hem de UI'da gosterilecek kaynagi tasiyoruz.
+    # Boylece backend response modeli ile frontend gorunumu ayni veriye dayanir.
     return {
-        "rag_context": result.source_chunk if result.found else None
+        "rag_context": result.source_chunk if result.found else None,
+        "rag_source": result.filename if result.found else None,
     }
 
 
@@ -244,7 +251,9 @@ def response_node(state: MentorGraphState) -> dict:
     final = ChatResponse(
         session_id=state["message"].session_id,
         content=response_text,
-        rag_source=None,
+        # Not kaynagi varsa API response'a ekliyoruz.
+        # Frontend bunu "hangi nottan beslendi" bilgisi olarak gosterebilir.
+        rag_source=state.get("rag_source"),
         mentor_intervention=state.get("intervention"),
         current_state=estimate.state if estimate else UserState.UNKNOWN,
     )
