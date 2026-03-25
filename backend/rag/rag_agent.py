@@ -85,7 +85,7 @@ class RAGAgent:
     query: str,
     history: list[dict],  # [{"role": "user", "content": "..."}, ...]
     max_chars: int = 1000,  # kaç karaktere kadar geçmiş dahil edilsin
-) -> RAGResult:
+    ) -> RAGResult:
     """
     Kullanıcının tüm sohbet geçmişini + son soruyu birleştirerek
     FAISS index'inde arama yapar.
