@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     openai_vision_model: str = "gpt-4o"          # Fotoğraf analizi için
     openai_embedding_model: str = "text-embedding-3-small"
 
+    # ── Database ───────────────────────────────────
+    database_url: str = "sqlite:///./data/focusai.db"
+    data_dir: str = "./data"
+
     # ── Kamera / CV Engine ────────────────────
     camera_id: int = 0
     camera_enabled: bool = False                  # Varsayılan kapalı, kullanıcı açar

@@ -10,6 +10,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.core.config import settings
 from backend.api.routers import session, chat, dashboard, upload
+from backend.core.database import init_db
+
+init_db()
 
 app = FastAPI(
     title=settings.app_name,
