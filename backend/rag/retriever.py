@@ -172,7 +172,7 @@ class FAISSRetriever:
 
     def get_all_filenames(self, user_id: str) -> list[str]:
         """
-         FAISS index'indeki tüm benzersiz dosya adlarını döner.
+        FAISS index'indeki tüm benzersiz dosya adlarını döner.
         Dashboard'da 'yüklediğin notlar: türev.pdf, integral.pdf' için.
         """
         index_path = self._get_index_path(user_id)
@@ -184,8 +184,8 @@ class FAISSRetriever:
                 str(index_path),
                 self.embeddings,
                 allow_dangerous_deserialization=True,
-        )
-        # FAISS'in iç store'undan metadata'yı çek
+            )
+            # FAISS'in iç store'undan metadata'yı çek
             filenames = set()
             for doc_id in index.docstore._dict:
                 doc = index.docstore._dict[doc_id]
