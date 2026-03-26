@@ -15,6 +15,9 @@ def make_feature(
     message_length: int,
     help_seeking_score: float = 0.0,
     answer_commitment_score: float = 0.0,
+    confusion_score: float = 0.0,
+    semantic_retry_score: float = 0.0,
+    fatigue_text_score: float = 0.0,
     ear_score: float | None = None,
     gaze_on_screen: bool | None = None,
     hand_on_chin: bool | None = None,
@@ -28,8 +31,11 @@ def make_feature(
         response_time_seconds=response_time_seconds,
         message_length=message_length,
         topic="programlama",
+        confusion_score=confusion_score,
+        semantic_retry_score=semantic_retry_score,
         help_seeking_score=help_seeking_score,
         answer_commitment_score=answer_commitment_score,
+        fatigue_text_score=fatigue_text_score,
         ear_score=ear_score,
         gaze_on_screen=gaze_on_screen,
         hand_on_chin=hand_on_chin,
@@ -265,6 +271,66 @@ class StateScenarioTests(unittest.TestCase):
         self.assertEqual(after.intervention_type, InterventionType.HINT)
         self.assertIn("hint", after.decision_reason.lower())
         self.assertGreater(summary["hint"]["success_rate"], summary["strategy"]["success_rate"])
+
+    def test_explicit_fatigue_language_blocks_focused_bias(self) -> None:
+        baseline = make_baseline(
+            response_mean=12,
+            response_std=4,
+            idle_mean=18,
+            idle_std=6,
+            length_mean=52,
+            length_std=18,
+            retry_mean=0.1,
+            retry_std=1,
+        )
+        feature = make_feature(
+            session_id="fatigue-text-student",
+            idle_time_seconds=24,
+            retry_count=0,
+            response_time_seconds=18,
+            message_length=34,
+            confusion_score=0.42,
+            fatigue_text_score=0.82,
+            answer_commitment_score=0.18,
+            gaze_on_screen=True,
+            hand_on_chin=False,
+        )
+
+        estimate = self.model.predict(feature, baseline_profile=baseline)
+
+        self.assertNotEqual(estimate.predicted_state, UserState.FOCUSED)
+        self.assertGreater(
+            estimate.state_probabilities[UserState.FATIGUED.value],
+            estimate.state_probabilities[UserState.FOCUSED.value],
+        )
+
+    def test_explicit_fatigue_language_prefers_recovery_policy(self) -> None:
+        baseline = make_baseline(
+            response_mean=10,
+            response_std=4,
+            idle_mean=12,
+            idle_std=5,
+            length_mean=40,
+            length_std=14,
+            retry_mean=0.2,
+            retry_std=1,
+        )
+        feature = make_feature(
+            session_id="fatigue-recovery",
+            idle_time_seconds=35,
+            retry_count=0,
+            response_time_seconds=14,
+            message_length=32,
+            confusion_score=0.28,
+            fatigue_text_score=0.9,
+            answer_commitment_score=0.16,
+            gaze_on_screen=True,
+            hand_on_chin=False,
+        )
+
+        estimate = self.model.predict(feature, baseline_profile=baseline)
+
+        self.assertEqual(estimate.response_policy, ResponsePolicyMode.RECOVERY)
 
 
 if __name__ == "__main__":

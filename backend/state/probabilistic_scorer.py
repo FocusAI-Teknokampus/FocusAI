@@ -30,6 +30,7 @@ class ProbabilisticScorer:
         question_density = getattr(features, "question_density", 0.0) or 0.0
         help_seeking = getattr(features, "help_seeking_score", 0.0) or 0.0
         answer_commitment = getattr(features, "answer_commitment_score", 0.0) or 0.0
+        fatigue_text_score = getattr(features, "fatigue_text_score", 0.0) or 0.0
 
         raw_scores[UserState.STUCK] += retry_spike * 1.4
         raw_scores[UserState.STUCK] += idle_spike * 0.9
@@ -41,6 +42,9 @@ class ProbabilisticScorer:
 
         raw_scores[UserState.FATIGUED] += idle_spike * 1.0
         raw_scores[UserState.FATIGUED] += slow_response * 0.7
+        raw_scores[UserState.FATIGUED] += fatigue_text_score * 1.2
+        raw_scores[UserState.FATIGUED] += max(0.0, slow_response - 0.3) * 0.4
+        raw_scores[UserState.FATIGUED] += max(0.0, low_commitment - 0.2) * 0.3
 
         raw_scores[UserState.DISTRACTED] += short_message * 0.9
         raw_scores[UserState.DISTRACTED] += max(0.0, idle_spike - 0.2) * 0.5
@@ -61,6 +65,7 @@ class ProbabilisticScorer:
             confusion_score * 0.7,
             help_spike * 0.5,
             low_commitment * 0.6,
+            fatigue_text_score * 0.8,
         )
         if focus_penalty < 0.2 and features.retry_count == 0:
             raw_scores[UserState.FOCUSED] += 1.0
@@ -68,6 +73,7 @@ class ProbabilisticScorer:
         raw_scores[UserState.FOCUSED] += max(0.0, topic_stability - 0.55) * 0.4
         raw_scores[UserState.FOCUSED] += answer_commitment * 0.85
         raw_scores[UserState.FOCUSED] -= max(0.0, help_seeking - 0.55) * 0.2
+        raw_scores[UserState.FOCUSED] -= fatigue_text_score * 0.6
         if features.gaze_on_screen is False:
             raw_scores[UserState.FOCUSED] -= 0.15
 

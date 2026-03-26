@@ -213,6 +213,18 @@ class SessionService:
         self.db.refresh(session)
         return session
 
+    def mark_camera_used(self, session_id: str) -> Optional[SessionRecord]:
+        session = self.get_session(session_id)
+        if not session:
+            return None
+
+        if not session.camera_used:
+            session.camera_used = True
+            self.db.commit()
+            self.db.refresh(session)
+
+        return session
+
     # ============================================================
     # MESSAGE
     # ============================================================

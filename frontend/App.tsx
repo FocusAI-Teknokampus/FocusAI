@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Line, LineChart, ResponsiveContainer, YAxis } from 'recharts';
 import logo from './logo.jpeg';
-import { useFocusStore } from './store';
+import { useFocusStore, type CameraPermissionState } from './store';
 
 const stateLabelMap: Record<string, string> = {
   focused: 'Odakta',
@@ -71,6 +71,21 @@ function firstText(...values: Array<string | null | undefined>) {
   return values.find((value) => Boolean(value && value.trim())) || '';
 }
 
+function getSignalLevel(value?: number | null) {
+  if (value == null) return 'yok';
+  if (value >= 0.7) return 'yuksek';
+  if (value >= 0.4) return 'orta';
+  if (value >= 0.18) return 'dusuk';
+  return 'cok dusuk';
+}
+
+function getProbabilityEntries(probabilities?: Record<string, number> | null) {
+  if (!probabilities) return [];
+  return Object.entries(probabilities)
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 3);
+}
+
 function getOutcomeLabel(item: {
   average_focus_score?: number | null;
   intervention_count: number;
@@ -103,6 +118,37 @@ function getProfileSummary(userProfile: {
   return style;
 }
 
+function getCameraPermissionLabel(permission: CameraPermissionState) {
+  if (permission === 'granted') return 'Izin verildi';
+  if (permission === 'denied') return 'Izin reddedildi';
+  if (permission === 'error') return 'Kamera hatasi';
+  return 'Izin bekleniyor';
+}
+
+function getCameraBackendLabel(cameraStatus?: {
+  status?: string;
+  active?: boolean;
+  available?: boolean;
+  face_detected?: boolean;
+  backend_state?: string | null;
+  attention_score?: number | null;
+} | null) {
+  if (!cameraStatus) return 'Backend beklemede';
+  if (cameraStatus.status === 'error') return 'Backend hata verdi';
+  if (!cameraStatus.active) return 'Backend bagli degil';
+  if (!cameraStatus.available) return 'Frame geliyor, yuz araniyor';
+
+  const focus = cameraStatus.attention_score != null
+    ? ` | fokus ${Math.round(cameraStatus.attention_score * 100)}%`
+    : '';
+  const backendState = cameraStatus.backend_state
+    ? ` | ${cameraStatus.backend_state.toLowerCase()}`
+    : '';
+  return cameraStatus.face_detected
+    ? `CV aktif${focus}${backendState}`
+    : 'CV aktif | yuz bekleniyor';
+}
+
 export default function App() {
   const {
     userId,
@@ -110,6 +156,9 @@ export default function App() {
     userProfile,
     topic,
     sessionId,
+    cameraPermission,
+    cameraStreamActive,
+    cameraStatus,
     currentState,
     messages,
     stats,
@@ -124,6 +173,9 @@ export default function App() {
     isSessionLoading,
     error,
     setTopic,
+    setCameraPermission,
+    setCameraStreamActive,
+    clearCameraStatus,
     selectLearnerProfile,
     createLearnerProfile,
     resumeLastProfile,
@@ -134,6 +186,7 @@ export default function App() {
     endSession,
     uploadPdf,
     hydrateUserWorkspace,
+    pushCameraFrame,
     selectHistorySession,
     submitFeedback,
   } = useFocusStore();
@@ -143,6 +196,11 @@ export default function App() {
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 1180);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const frameLoopRef = useRef<number | null>(null);
+  const isUploadingFrameRef = useRef(false);
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 1180);
@@ -162,10 +220,90 @@ export default function App() {
     void hydrateUserWorkspace(userId);
   }, [userId, hydrateUserWorkspace]);
 
+  const stopCameraStream = () => {
+    if (frameLoopRef.current != null) {
+      window.clearInterval(frameLoopRef.current);
+      frameLoopRef.current = null;
+    }
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+
+    isUploadingFrameRef.current = false;
+    setCameraStreamActive(false);
+    clearCameraStatus();
+  };
+
+  useEffect(() => () => stopCameraStream(), []);
+
+  useEffect(() => {
+    if (
+      !sessionId ||
+      cameraPermission !== 'granted' ||
+      !cameraStreamActive ||
+      !videoRef.current ||
+      !canvasRef.current
+    ) {
+      if (frameLoopRef.current != null) {
+        window.clearInterval(frameLoopRef.current);
+        frameLoopRef.current = null;
+      }
+      return;
+    }
+
+    const captureAndSend = async () => {
+      if (isUploadingFrameRef.current) return;
+
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      if (!video || !canvas || video.readyState < 2) return;
+
+      isUploadingFrameRef.current = true;
+      try {
+        const targetWidth = 320;
+        const targetHeight = Math.max(
+          180,
+          Math.round(targetWidth / Math.max(1, video.videoWidth || 16) * (video.videoHeight || 9))
+        );
+
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+
+        const context = canvas.getContext('2d');
+        if (!context) return;
+
+        context.drawImage(video, 0, 0, targetWidth, targetHeight);
+        await pushCameraFrame(canvas.toDataURL('image/jpeg', 0.72));
+      } finally {
+        isUploadingFrameRef.current = false;
+      }
+    };
+
+    void captureAndSend();
+    frameLoopRef.current = window.setInterval(() => {
+      void captureAndSend();
+    }, 1200);
+
+    return () => {
+      if (frameLoopRef.current != null) {
+        window.clearInterval(frameLoopRef.current);
+        frameLoopRef.current = null;
+      }
+    };
+  }, [sessionId, cameraPermission, cameraStreamActive, pushCameraFrame]);
+
   const currentBadgeColor = useMemo(
     () => stateColorMap[currentState] || '#475569',
     [currentState]
   );
+  const cameraPermissionLabel = getCameraPermissionLabel(cameraPermission);
+  const cameraBackendLabel = getCameraBackendLabel(cameraStatus);
 
   const selectedSession = sessionHistory.find(
     (item) => item.session_id === selectedHistorySessionId
@@ -219,6 +357,14 @@ export default function App() {
     welcomeData?.operational_next_session_plan?.mentor_tactic,
     userProfile?.best_intervention_type
   );
+  const latestStateAnalysis =
+    dashboard?.latest_state_analysis ?? welcomeData?.latest_state_analysis ?? null;
+  const latestFeatureVector = latestStateAnalysis?.feature_vector ?? null;
+  const fatigueTextScore = latestFeatureVector?.fatigue_text_score ?? null;
+  const confusionScore = latestFeatureVector?.confusion_score ?? null;
+  const semanticRetryScore = latestFeatureVector?.semantic_retry_score ?? null;
+  const dominantSignals = latestStateAnalysis?.dominant_signals ?? currentMentorMessage?.dominantSignals ?? [];
+  const topStateProbabilities = getProbabilityEntries(latestStateAnalysis?.state_probabilities ?? null);
   const recentBalanceData = sessionHistory
     .slice(0, 7)
     .reverse()
@@ -234,12 +380,54 @@ export default function App() {
     await sendMessage(trimmed);
   };
 
+  const handleCameraAccess = async () => {
+    if (cameraStreamActive) {
+      stopCameraStream();
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraPermission('error');
+      stopCameraStream();
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+          facingMode: 'user',
+        },
+        audio: false,
+      });
+
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play().catch(() => undefined);
+      }
+
+      setCameraPermission('granted');
+      setCameraStreamActive(true);
+    } catch (err) {
+      const errorName = err instanceof DOMException ? err.name : '';
+      setCameraPermission(
+        errorName === 'NotAllowedError' || errorName === 'SecurityError'
+          ? 'denied'
+          : 'error'
+      );
+      stopCameraStream();
+    }
+  };
+
   const handleSessionAction = async () => {
     if (sessionId) {
       await endSession();
+      stopCameraStream();
       return;
     }
-    await startSession();
+    await startSession(cameraPermission === 'granted' && cameraStreamActive);
   };
 
   const handlePdfSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -302,6 +490,9 @@ export default function App() {
         gap: '18px',
       }}
     >
+      <video ref={videoRef} playsInline muted style={{ display: 'none' }} />
+      <canvas ref={canvasRef} style={{ display: 'none' }} />
+
       <header
         style={{
           display: 'flex',
@@ -327,8 +518,11 @@ export default function App() {
           <div style={{ backgroundColor: '#eff6ff', color: currentBadgeColor, border: `1px solid ${currentBadgeColor}22`, padding: '9px 14px', borderRadius: '999px', fontWeight: 800, fontSize: '12px' }}>
             {stateLabelMap[currentState]}
           </div>
-          <div style={{ backgroundColor: '#fff7ed', color: '#9a3412', border: '1px solid #fdba74', padding: '9px 14px', borderRadius: '999px', fontWeight: 700, fontSize: '12px' }}>
-            Kamera hook hazir, isleme kapali
+          <div style={{ backgroundColor: cameraPermission === 'granted' ? '#ecfdf5' : '#fff7ed', color: cameraPermission === 'granted' ? '#166534' : '#9a3412', border: `1px solid ${cameraPermission === 'granted' ? '#86efac' : '#fdba74'}`, padding: '9px 14px', borderRadius: '999px', fontWeight: 700, fontSize: '12px' }}>
+            Kamera izni: {cameraPermissionLabel}
+          </div>
+          <div style={{ backgroundColor: cameraStatus?.active ? '#eff6ff' : '#f8fafc', color: cameraStatus?.active ? '#1d4ed8' : '#475569', border: `1px solid ${cameraStatus?.active ? '#93c5fd' : '#cbd5e1'}`, padding: '9px 14px', borderRadius: '999px', fontWeight: 700, fontSize: '12px' }}>
+            {cameraBackendLabel}
           </div>
         </div>
       </header>
@@ -416,6 +610,20 @@ export default function App() {
                 <button onClick={() => void handleCreateProfile()} disabled={!!sessionId || isSessionLoading || !newProfileName.trim()} style={{ border: 'none', borderRadius: '16px', backgroundColor: '#0f766e', color: 'white', padding: '0 18px', fontWeight: 700, minHeight: '48px' }}>
                   Yeni profil
                 </button>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'auto minmax(0, 1fr)', gap: '10px', alignItems: 'stretch' }}>
+                <button onClick={() => void handleCameraAccess()} style={{ border: 'none', borderRadius: '16px', backgroundColor: cameraStreamActive ? '#b91c1c' : '#0f766e', color: 'white', padding: '0 18px', fontWeight: 800, minHeight: '48px' }}>
+                  {cameraStreamActive ? 'Kamerayi Kapat' : 'Kamera Izni Ver'}
+                </button>
+                <div style={{ backgroundColor: 'rgba(255,255,255,0.85)', border: '1px solid #dbeafe', borderRadius: '16px', padding: '12px 14px', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '4px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: '#1e3a8a' }}>
+                    {cameraPermissionLabel} {cameraStreamActive ? '| stream acik' : '| stream kapali'}
+                  </div>
+                  <div style={{ fontSize: '12px', color: cameraStatus?.status === 'error' ? '#991b1b' : '#475569' }}>
+                    {cameraStatus?.error || cameraBackendLabel}
+                  </div>
+                </div>
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1fr) auto auto', gap: '10px' }}>
@@ -608,6 +816,36 @@ export default function App() {
                   {lastMentorSource || 'Bu cevapta not kaynagi kullanilmadi.'}
                 </div>
               </div>
+              {(fatigueTextScore != null || confusionScore != null || semanticRetryScore != null || topStateProbabilities.length > 0 || dominantSignals.length > 0) && (
+                <div style={{ backgroundColor: '#f8fafc', borderRadius: '18px', padding: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div style={sectionLabelStyle}>Son state snapshot</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '8px' }}>
+                    <div style={{ fontSize: '13px', color: '#0f172a' }}>
+                      Yorgunluk ifadesi: <strong>{getSignalLevel(fatigueTextScore)}</strong>
+                    </div>
+                    <div style={{ fontSize: '13px', color: '#0f172a' }}>
+                      Karisiklik: <strong>{getSignalLevel(confusionScore)}</strong>
+                    </div>
+                    <div style={{ fontSize: '13px', color: '#0f172a' }}>
+                      Tekrar: <strong>{getSignalLevel(semanticRetryScore)}</strong>
+                    </div>
+                  </div>
+                  {dominantSignals.length > 0 && (
+                    <div style={{ fontSize: '12px', color: '#475569', lineHeight: '1.55' }}>
+                      Dominant signals: {dominantSignals.join(', ')}
+                    </div>
+                  )}
+                  {topStateProbabilities.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                      {topStateProbabilities.map(([stateKey, value]) => (
+                        <div key={stateKey} style={{ backgroundColor: 'white', border: '1px solid #dbeafe', borderRadius: '999px', padding: '6px 10px', fontSize: '12px', color: '#1e3a8a', fontWeight: 700 }}>
+                          {stateLabelMap[stateKey] || stateKey}: {formatPercent(value)}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               {dashboard?.latest_intervention?.reason && (
                 <div style={{ backgroundColor: '#f8fafc', borderRadius: '18px', padding: '14px' }}>
                   <div style={sectionLabelStyle}>Son mudahale secimi</div>

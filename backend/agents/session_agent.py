@@ -254,6 +254,13 @@ class SessionAgent:
         except Exception:
             pass
 
+        try:
+            from backend.services.camera_runtime_service import camera_runtime_service
+
+            camera_runtime_service.reset_session(request.session_id)
+        except Exception:
+            pass
+
         self.short_term.delete(request.session_id)
 
         return {

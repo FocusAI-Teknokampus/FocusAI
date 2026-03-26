@@ -173,6 +173,7 @@ class AnalyticsService:
                     "severity": row.severity,
                     "state_before": row.state_before,
                     "state_after": row.state_after,
+                    "metadata": self._safe_load_dict(row.metadata_json),
                 }
                 for row in behavior_events
             ],

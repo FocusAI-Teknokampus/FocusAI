@@ -4,7 +4,18 @@ import re
 from datetime import datetime
 from typing import Optional
 
+from backend.core.config import settings
 from backend.core.schemas import CameraSignal, FeatureVector, InputChannel
+from backend.state.feature_classifier import FeatureIntentClassifier
+from backend.state.semantic_features import (
+    ANSWER_COMMITMENT_EXAMPLES,
+    DIRECT_ANSWER_EXAMPLES,
+    FATIGUE_EXAMPLES,
+    HELP_SEEKING_EXAMPLES,
+    SemanticFeatureProvider,
+    cosine_similarity,
+    normalize_text,
+)
 
 
 class FeatureExtractor:
@@ -12,11 +23,17 @@ class FeatureExtractor:
     Converts raw message activity into a richer feature vector for the state model.
     """
 
-    def __init__(self):
+    def __init__(self, semantic_provider: Optional[SemanticFeatureProvider] = None):
         self._retry_counts: dict[str, int] = {}
         self._last_message_times: dict[str, datetime] = {}
         self._topic_history: dict[str, list[str]] = {}
         self._message_history: dict[str, list[dict[str, object]]] = {}
+        self._semantic_provider = semantic_provider or SemanticFeatureProvider.from_settings()
+        self._feature_classifier = (
+            FeatureIntentClassifier(self._semantic_provider)
+            if settings.feature_classifier_enabled
+            else None
+        )
 
     def extract(
         self,
@@ -26,14 +43,33 @@ class FeatureExtractor:
         channel: InputChannel = InputChannel.TEXT,
         camera_signal: Optional[CameraSignal] = None,
     ) -> FeatureVector:
-        topic = self._detect_topic(message_content)
+        semantic = self._semantic_provider.analyze_text(message_content)
+        topic = semantic.topic or self._detect_topic(message_content)
         idle_time = self._calculate_idle_time(session_id, message_timestamp)
         response_time = self._estimate_response_time(message_content, channel)
         question_density = self._question_density(message_content)
         confusion_score = self._confusion_score(message_content)
-        help_seeking_score = self._help_seeking_score(message_content)
-        answer_commitment_score = self._answer_commitment_score(message_content)
-        semantic_retry_score = self._semantic_retry_score(session_id, message_content, topic)
+        help_seeking_semantic_score = self._help_seeking_semantic_score(message_content)
+        help_seeking_classifier_score = self._help_seeking_classifier_score(message_content)
+        help_seeking_score = self._help_seeking_score(
+            message_content,
+            semantic_score=help_seeking_semantic_score,
+            classifier_score=help_seeking_classifier_score,
+        )
+        answer_commitment_semantic_score = self._answer_commitment_semantic_score(message_content)
+        answer_commitment_classifier_score = self._answer_commitment_classifier_score(message_content)
+        answer_commitment_score = self._answer_commitment_score(
+            message_content,
+            semantic_score=answer_commitment_semantic_score,
+            classifier_score=answer_commitment_classifier_score,
+        )
+        fatigue_text_score = self._fatigue_text_score(message_content)
+        semantic_retry_score = self._semantic_retry_score(
+            session_id=session_id,
+            content=message_content,
+            topic=topic,
+            embedding=semantic.embedding,
+        )
         topic_stability = self._topic_stability(session_id, topic)
         retry_count = self._update_retry_count(
             session_id=session_id,
@@ -45,7 +81,7 @@ class FeatureExtractor:
         )
 
         self._last_message_times[session_id] = message_timestamp
-        self._remember_message(session_id, message_content, topic)
+        self._remember_message(session_id, message_content, topic, semantic.embedding)
 
         cam = self._extract_camera_features(camera_signal)
         return FeatureVector(
@@ -59,9 +95,15 @@ class FeatureExtractor:
             question_density=question_density,
             confusion_score=confusion_score,
             topic_stability=topic_stability,
+            topic_confidence=semantic.topic_score if topic == semantic.topic else 0.0,
             semantic_retry_score=semantic_retry_score,
             help_seeking_score=help_seeking_score,
+            help_seeking_semantic_score=help_seeking_semantic_score,
+            help_seeking_classifier_score=help_seeking_classifier_score,
             answer_commitment_score=answer_commitment_score,
+            answer_commitment_semantic_score=answer_commitment_semantic_score,
+            answer_commitment_classifier_score=answer_commitment_classifier_score,
+            fatigue_text_score=fatigue_text_score,
             ear_score=cam.get("ear_score"),
             gaze_on_screen=cam.get("gaze_on_screen"),
             hand_on_chin=cam.get("hand_on_chin"),
@@ -166,6 +208,9 @@ class FeatureExtractor:
         normalized = self._normalize_text(content)
         confusion_patterns = [
             "anlamadim",
+            "anlayamiyorum",
+            "tam anlayamiyorum",
+            "anlamakta zorlaniyorum",
             "olmadi",
             "takildim",
             "karisti",
@@ -189,8 +234,14 @@ class FeatureExtractor:
             score += 0.08
         return round(min(1.0, score), 3)
 
-    def _help_seeking_score(self, content: str) -> float:
+    def _help_seeking_score(
+        self,
+        content: str,
+        semantic_score: Optional[float] = None,
+        classifier_score: Optional[float] = None,
+    ) -> float:
         normalized = self._normalize_text(content)
+        interrogatives = ("neden", "nasil", "hangi", "nereye", "ne zaman", "kac", "niye")
         patterns = [
             "yardim",
             "ipucu",
@@ -209,11 +260,42 @@ class FeatureExtractor:
                 score += 0.14
         if "?" in content:
             score += 0.08
+        if any(word in normalized for word in interrogatives):
+            score += 0.08
         if len(content) <= 40:
             score += 0.06
-        return round(min(1.0, score), 3)
+        lexical = min(1.0, score)
+        semantic = (
+            semantic_score
+            if semantic_score is not None
+            else self._help_seeking_semantic_score(content)
+        )
+        enriched = lexical + (semantic * 0.25)
+        return round(
+            min(1.0, self._blend_classifier_boost(enriched, classifier_score)),
+            3,
+        )
 
-    def _answer_commitment_score(self, content: str) -> float:
+    def _help_seeking_semantic_score(self, content: str) -> float:
+        return self._semantic_provider.example_similarity_score(
+            text=content,
+            positive_examples=HELP_SEEKING_EXAMPLES,
+            negative_examples=ANSWER_COMMITMENT_EXAMPLES,
+            floor=0.24,
+            ceiling=0.76,
+        )
+
+    def _help_seeking_classifier_score(self, content: str) -> float:
+        if self._feature_classifier is None:
+            return 0.0
+        return self._feature_classifier.score_help_seeking(content)
+
+    def _answer_commitment_score(
+        self,
+        content: str,
+        semantic_score: Optional[float] = None,
+        classifier_score: Optional[float] = None,
+    ) -> float:
         normalized = self._normalize_text(content)
         effort_patterns = [
             "denedim",
@@ -251,33 +333,144 @@ class FeatureExtractor:
             score += 0.08
         if any(pattern in normalized for pattern in shortcut_patterns):
             score -= 0.25
-        return round(max(0.0, min(1.0, score)), 3)
+        lexical = max(0.0, min(1.0, score))
+        semantic = (
+            semantic_score
+            if semantic_score is not None
+            else self._answer_commitment_semantic_score(content)
+        )
+        enriched = lexical + (semantic * 0.2)
+        return round(
+            max(0.0, min(1.0, self._blend_classifier_boost(enriched, classifier_score))),
+            3,
+        )
+
+    def _answer_commitment_semantic_score(self, content: str) -> float:
+        return self._semantic_provider.example_similarity_score(
+            text=content,
+            positive_examples=ANSWER_COMMITMENT_EXAMPLES,
+            negative_examples=DIRECT_ANSWER_EXAMPLES,
+            floor=0.2,
+            ceiling=0.74,
+        )
+
+    def _answer_commitment_classifier_score(self, content: str) -> float:
+        if self._feature_classifier is None:
+            return 0.0
+        return self._feature_classifier.score_answer_commitment(content)
+
+    def _blend_classifier_boost(
+        self,
+        base_score: float,
+        classifier_score: Optional[float],
+    ) -> float:
+        if classifier_score is None:
+            return base_score
+        boost = max(0.0, classifier_score - base_score) * settings.feature_classifier_blend_weight
+        return base_score + boost
+
+    def _fatigue_text_score(self, content: str) -> float:
+        lexical = self._fatigue_text_lexical_score(content)
+        semantic = self._fatigue_text_semantic_score(content)
+        score = lexical + (semantic * 0.35)
+        return round(min(1.0, score), 3)
+
+    def _fatigue_text_lexical_score(self, content: str) -> float:
+        normalized = self._normalize_text(content)
+        patterns = [
+            ("cok yorgunum", 0.42),
+            ("yorgunum", 0.28),
+            ("yoruldum", 0.34),
+            ("kafam almiyor", 0.42),
+            ("dinlenmem lazim", 0.4),
+            ("uykum var", 0.3),
+            ("gozum kapaniyor", 0.46),
+            ("odaklanamiyorum", 0.28),
+            ("beynim durdu", 0.42),
+            ("anlamakta zorlaniyorum", 0.18),
+            ("anlamakta zorlaniyorum cunku yoruldum", 0.24),
+            ("anlayamiyorum cunku yoruldum", 0.24),
+            ("sonra devam edelim", 0.14),
+            ("mola vermem lazim", 0.22),
+            ("ara vermem lazim", 0.22),
+        ]
+        score = 0.0
+        matched_patterns: list[str] = []
+        for pattern, weight in patterns:
+            if pattern in normalized:
+                score += weight
+                matched_patterns.append(pattern)
+
+        has_explicit_fatigue = any(
+            token in normalized
+            for token in (
+                "yoruldum",
+                "yorgunum",
+                "kafam almiyor",
+                "dinlenmem lazim",
+                "uykum var",
+                "gozum kapaniyor",
+                "beynim durdu",
+            )
+        )
+        has_cognitive_load = any(
+            token in normalized
+            for token in (
+                "odaklanamiyorum",
+                "anlamakta zorlaniyorum",
+                "anlayamiyorum",
+            )
+        )
+        if has_explicit_fatigue and has_cognitive_load:
+            score += 0.18
+        if has_explicit_fatigue and any(token in normalized for token in ("sonra devam edelim", "mola", "ara ver")):
+            score += 0.08
+        if len(matched_patterns) >= 2:
+            score += 0.06
+        return min(1.0, score)
+
+    def _fatigue_text_semantic_score(self, content: str) -> float:
+        return self._semantic_provider.example_similarity_score(
+            text=content,
+            positive_examples=FATIGUE_EXAMPLES,
+            negative_examples=ANSWER_COMMITMENT_EXAMPLES + DIRECT_ANSWER_EXAMPLES,
+            floor=0.18,
+            ceiling=0.72,
+        )
 
     def _semantic_retry_score(
         self,
         session_id: str,
         content: str,
         topic: Optional[str],
+        embedding: list[float],
     ) -> float:
         history = self._message_history.get(session_id, [])
         if not history:
             return 0.0
 
         current_tokens = self._content_tokens(content)
-        if not current_tokens:
+        if not current_tokens and not embedding:
             return 0.0
 
         best_similarity = 0.0
-        for item in history[-4:]:
+        for item in history[-5:]:
+            previous_embedding = item.get("embedding", [])
+            semantic_similarity = 0.0
+            if isinstance(previous_embedding, list):
+                semantic_similarity = cosine_similarity(embedding, previous_embedding)
+
             previous_tokens = item.get("tokens", set())
-            if not isinstance(previous_tokens, set) or not previous_tokens:
-                continue
+            if not isinstance(previous_tokens, set):
+                previous_tokens = set()
 
             overlap = len(current_tokens & previous_tokens)
             union = len(current_tokens | previous_tokens)
-            similarity = overlap / union if union else 0.0
+            lexical_similarity = overlap / union if union else 0.0
+            similarity = max(semantic_similarity, lexical_similarity)
+
             if topic and item.get("topic") == topic:
-                similarity += 0.12
+                similarity += 0.14
             best_similarity = max(best_similarity, similarity)
 
         return round(min(1.0, best_similarity), 3)
@@ -293,13 +486,20 @@ class FeatureExtractor:
         same_count = sum(1 for value in window if value == topic)
         return round(min(1.0, same_count / max(1, len(window))), 3)
 
-    def _remember_message(self, session_id: str, content: str, topic: Optional[str]) -> None:
+    def _remember_message(
+        self,
+        session_id: str,
+        content: str,
+        topic: Optional[str],
+        embedding: list[float],
+    ) -> None:
         message_history = self._message_history.setdefault(session_id, [])
         message_history.append(
             {
                 "content": content,
                 "topic": topic,
                 "tokens": self._content_tokens(content),
+                "embedding": embedding,
             }
         )
         self._message_history[session_id] = message_history[-6:]
@@ -310,17 +510,7 @@ class FeatureExtractor:
         self._topic_history[session_id] = topic_history[-6:]
 
     def _normalize_text(self, content: str) -> str:
-        lowered = content.lower()
-        lowered = (
-            lowered.replace("ı", "i")
-            .replace("ş", "s")
-            .replace("ğ", "g")
-            .replace("ü", "u")
-            .replace("ö", "o")
-            .replace("ç", "c")
-        )
-        cleaned = re.sub(r"[^\w\s]", " ", lowered, flags=re.UNICODE)
-        return re.sub(r"\s+", " ", cleaned).strip()
+        return normalize_text(content)
 
     def _content_tokens(self, content: str) -> set[str]:
         stopwords = {
@@ -331,7 +521,6 @@ class FeatureExtractor:
             "bir",
             "icin",
             "mi",
-            "mı",
             "mu",
             "the",
             "is",

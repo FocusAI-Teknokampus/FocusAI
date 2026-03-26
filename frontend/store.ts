@@ -56,6 +56,31 @@ interface SessionEndResponse {
   topics_covered: string[];
 }
 
+export type CameraPermissionState = 'idle' | 'granted' | 'denied' | 'error';
+
+interface CameraSignalPayload {
+  timestamp: string;
+  ear_score: number;
+  gaze_on_screen: boolean;
+  hand_on_chin: boolean;
+  head_tilt_angle?: number | null;
+}
+
+interface CameraStatusResponse {
+  session_id: string;
+  status: 'idle' | 'active' | 'error' | string;
+  available: boolean;
+  active: boolean;
+  face_detected: boolean;
+  backend_state?: string | null;
+  attention_score?: number | null;
+  processing_ms?: number | null;
+  frame_id: number;
+  signal?: CameraSignalPayload | null;
+  last_updated_at?: string | null;
+  error?: string | null;
+}
+
 interface DashboardResponse {
   session_id: string;
   user_id: string;
@@ -86,10 +111,21 @@ interface DashboardResponse {
     decision_margin?: number | null;
     uncertainty_signal?: number | null;
     learning_pattern?: string | null;
+    response_policy?: ResponsePolicyMode | null;
+    dominant_signals?: string[];
+    reasons?: string[];
     reason_summary?: string | null;
     deviation_features?: Record<string, unknown>;
     state_scores?: Record<string, number>;
     state_probabilities?: Record<string, number>;
+    feature_vector?: {
+      fatigue_text_score?: number | null;
+      confusion_score?: number | null;
+      semantic_retry_score?: number | null;
+      help_seeking_score?: number | null;
+      answer_commitment_score?: number | null;
+      [key: string]: unknown;
+    } | null;
   } | null;
   latest_intervention?: {
     intervention_type?: string | null;
@@ -230,6 +266,7 @@ interface InterventionPolicySummaryItem {
 
 interface WelcomeResponse {
   user_id: string;
+  resume_topic?: string | null;
   has_history: boolean;
   last_session?: {
     session_id: string;
@@ -357,6 +394,9 @@ interface FocusState {
   userProfile: UserProfileResponse | null;
   topic: string;
   sessionId: string | null;
+  cameraPermission: CameraPermissionState;
+  cameraStreamActive: boolean;
+  cameraStatus: CameraStatusResponse | null;
   currentState: UserState;
   messages: ChatMessageUI[];
   scores: { time: string; value: number }[];
@@ -375,6 +415,9 @@ interface FocusState {
   error: string | null;
   setUserId: (userId: string) => void;
   setTopic: (topic: string) => void;
+  setCameraPermission: (permission: CameraPermissionState) => void;
+  setCameraStreamActive: (active: boolean) => void;
+  clearCameraStatus: () => void;
   selectLearnerProfile: (profileId: string) => Promise<void>;
   createLearnerProfile: (label: string) => Promise<void>;
   resumeLastProfile: () => Promise<void>;
@@ -390,10 +433,11 @@ interface FocusState {
   fetchSessionHistory: (targetUserId?: string) => Promise<void>;
   fetchSessionMessages: (targetSessionId: string) => Promise<void>;
   fetchFocusTrend: (targetUserId?: string, days?: number) => Promise<void>;
-  fetchWelcome: (targetUserId?: string) => Promise<void>;
+  fetchWelcome: (targetUserId?: string, topicOverride?: string) => Promise<void>;
   fetchUserProfile: (targetUserId?: string) => Promise<void>;
   hydrateUserWorkspace: (targetUserId?: string) => Promise<void>;
   selectHistorySession: (sessionId: string) => Promise<void>;
+  pushCameraFrame: (imageBase64: string) => Promise<void>;
   submitFeedback: (params: SubmitFeedbackParams) => Promise<void>;
 }
 
@@ -604,6 +648,9 @@ export const useFocusStore = create<FocusState>((set, get) => ({
   userProfile: null,
   topic: '',
   sessionId: null,
+  cameraPermission: 'idle',
+  cameraStreamActive: false,
+  cameraStatus: null,
   currentState: 'unknown',
   messages: [defaultAiMessage()],
   scores: [],
@@ -623,6 +670,9 @@ export const useFocusStore = create<FocusState>((set, get) => ({
 
   setUserId: (userId) => set({ userId }),
   setTopic: (topic) => set({ topic }),
+  setCameraPermission: (cameraPermission) => set({ cameraPermission }),
+  setCameraStreamActive: (cameraStreamActive) => set({ cameraStreamActive }),
+  clearCameraStatus: () => set({ cameraStatus: null }),
   selectLearnerProfile: async (profileId) => {
     const normalizedId = normalizeProfileId(profileId);
     if (!normalizedId) {
@@ -644,6 +694,7 @@ export const useFocusStore = create<FocusState>((set, get) => ({
       userProfile: null,
       topic: '',
       sessionId: null,
+      cameraStatus: null,
       currentState: 'unknown',
       messages: [defaultAiMessage()],
       scores: [],
@@ -733,6 +784,7 @@ export const useFocusStore = create<FocusState>((set, get) => ({
       sessionSummary: null,
       dashboard: null,
       feedbackNotice: null,
+      cameraStatus: null,
     });
 
     try {
@@ -763,6 +815,7 @@ export const useFocusStore = create<FocusState>((set, get) => ({
         userId: data.user_id,
         learnerProfiles: nextProfiles,
         topic: data.topic ?? '',
+        cameraStatus: null,
         currentState: 'unknown',
         messages: [
           {
@@ -777,7 +830,7 @@ export const useFocusStore = create<FocusState>((set, get) => ({
       await Promise.all([
         get().fetchUploadedDocuments(data.user_id),
         get().fetchSessionHistory(data.user_id),
-        get().fetchWelcome(data.user_id),
+        get().fetchWelcome(data.user_id, data.topic ?? (topic.trim() || fallbackTopic || '')),
         get().fetchUserProfile(data.user_id),
       ]);
     } catch (err) {
@@ -828,6 +881,7 @@ export const useFocusStore = create<FocusState>((set, get) => ({
       if (res.status === 404) {
         set({
           sessionId: null,
+          cameraStatus: null,
           currentState: 'unknown',
           error: 'Oturum artik gecerli degil. Lutfen yeniden oturum baslat.',
         });
@@ -923,6 +977,7 @@ export const useFocusStore = create<FocusState>((set, get) => ({
       if (res.status === 404) {
         set({
           sessionId: null,
+          cameraStatus: null,
           currentState: 'unknown',
           error: 'Oturum backend tarafinda bulunamadi. Yerel oturum temizlendi.',
         });
@@ -939,6 +994,7 @@ export const useFocusStore = create<FocusState>((set, get) => ({
       set({
         sessionSummary: data,
         sessionId: null,
+        cameraStatus: null,
         currentState: 'unknown',
       });
 
@@ -1116,9 +1172,10 @@ export const useFocusStore = create<FocusState>((set, get) => ({
     }
   },
 
-  fetchWelcome: async (targetUserId) => {
-    const { userId } = get();
+  fetchWelcome: async (targetUserId, topicOverride) => {
+    const { userId, topic } = get();
     const activeUserId = normalizeProfileId(targetUserId ?? userId);
+    const resolvedTopic = (topicOverride ?? topic).trim();
 
     if (!activeUserId) {
       set({ welcomeData: null });
@@ -1126,7 +1183,10 @@ export const useFocusStore = create<FocusState>((set, get) => ({
     }
 
     try {
-      const res = await fetch(`${API_BASE}/welcome/${encodeURIComponent(activeUserId)}`);
+      const query = resolvedTopic
+        ? `?topic=${encodeURIComponent(resolvedTopic)}`
+        : '';
+      const res = await fetch(`${API_BASE}/welcome/${encodeURIComponent(activeUserId)}${query}`);
       if (!res.ok) return;
 
       const data: WelcomeResponse = await res.json();
@@ -1186,6 +1246,50 @@ export const useFocusStore = create<FocusState>((set, get) => ({
 
   selectHistorySession: async (targetSessionId) => {
     await get().fetchSessionMessages(targetSessionId);
+  },
+
+  pushCameraFrame: async (imageBase64) => {
+    const { sessionId, userId } = get();
+
+    if (!sessionId || !imageBase64) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/camera/frame`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: sessionId,
+          user_id: userId,
+          image_base64: imageBase64,
+        }),
+      });
+
+      if (res.status === 404) {
+        set({ cameraStatus: null });
+        return;
+      }
+
+      if (!res.ok) {
+        throw new Error(await parseError(res));
+      }
+
+      const data: CameraStatusResponse = await res.json();
+      set({ cameraStatus: data });
+    } catch (err) {
+      set((state) => ({
+        cameraStatus: {
+          session_id: sessionId,
+          status: 'error',
+          available: false,
+          active: state.cameraStreamActive,
+          face_detected: false,
+          frame_id: state.cameraStatus?.frame_id ?? 0,
+          error: err instanceof Error ? err.message : 'Kamera frame gonderilemedi.',
+        },
+      }));
+    }
   },
 
   submitFeedback: async ({

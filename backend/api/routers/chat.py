@@ -9,6 +9,7 @@ from backend.agents.graph import mentor_graph
 from backend.agents.session_agent import SessionAgent
 from backend.core.database import get_db
 from backend.core.schemas import ChatMessage, ChatResponse
+from backend.services.camera_runtime_service import camera_runtime_service
 from backend.services.session_service import SessionService
 from backend.services.behavior_service import BehaviorService
 
@@ -46,6 +47,7 @@ def chat(
 
     initial_state = {
         "message": message,
+        "camera_signal": camera_runtime_service.get_camera_signal(message.session_id),
         "session_context": None,
         "user_profile": None,
         "baseline_profile": None,

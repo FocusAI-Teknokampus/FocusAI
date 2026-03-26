@@ -22,6 +22,7 @@ except Exception:  # pragma: no cover - paket eksik oldugunda fallback
 from backend.core.config import settings
 from backend.core.schemas import (
     ChatMessage,
+    FeatureVector,
     InterventionType,
     MentorIntervention,
     ResponsePolicyMode,
@@ -125,6 +126,7 @@ class MentorAgent:
         message: ChatMessage,
         session_context: Optional[ShortTermContext] = None,
         user_profile: Optional[UserProfile] = None,
+        feature_vector: Optional[FeatureVector] = None,
         rag_context: Optional[str] = None,
         intervention: Optional[MentorIntervention] = None,
         state_estimate: Optional[StateEstimate] = None,
@@ -138,6 +140,7 @@ class MentorAgent:
         messages = self._build_message_history(
             current_message=message.content,
             session_context=session_context,
+            feature_vector=feature_vector,
             rag_context=rag_context,
             state_estimate=state_estimate,
             response_policy=response_policy,
@@ -292,6 +295,7 @@ class MentorAgent:
         self,
         current_message: str,
         session_context: Optional[ShortTermContext],
+        feature_vector: Optional[FeatureVector],
         rag_context: Optional[str],
         state_estimate: Optional[StateEstimate],
         response_policy: Optional[ResponsePolicyMode],
@@ -334,6 +338,17 @@ class MentorAgent:
                 messages.append({"role": "system", "content": state_hint})
 
         # Son kullanıcı mesajı
+        if feature_vector and feature_vector.fatigue_text_score >= 0.55:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "If the user explicitly expresses fatigue or tiredness, prioritize calm, "
+                        "short, supportive, recovery-oriented wording without overriding the selected policy."
+                    ),
+                }
+            )
+
         if response_policy:
             policy_hint = {
                 ResponsePolicyMode.DIRECT_HELP: "Cevabi net ve dogrudan ver; gereksiz dolanma.",

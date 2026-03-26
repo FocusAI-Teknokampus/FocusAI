@@ -20,14 +20,15 @@ class ContinuityService:
         self.baseline_service = BaselineService(db)
         self.policy_service = InterventionPolicyService(db)
 
-    def get_welcome(self, user_id: str) -> dict[str, Any]:
+    def get_welcome(self, user_id: str, topic: str | None = None) -> dict[str, Any]:
         baseline = self.baseline_service.refresh_user_baseline(user_id)
         policy = self.policy_service.get_policy_summary(user_id)
-        session, report = self.history_service.get_last_session_report(user_id)
+        session, report = self.history_service.get_best_resume_session(user_id, topic=topic)
 
         if session is None:
             return {
                 "user_id": user_id,
+                "resume_topic": topic,
                 "has_history": False,
                 "last_session": None,
                 "last_report": None,
@@ -103,6 +104,7 @@ class ContinuityService:
 
         return {
             "user_id": user_id,
+            "resume_topic": topic,
             "has_history": True,
             "last_session": {
                 "session_id": session.session_id,

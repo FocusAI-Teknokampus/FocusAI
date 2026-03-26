@@ -33,11 +33,20 @@ class BehaviorService:
         )
 
         focus_score = self._estimate_focus_score(state_estimate)
+        has_camera_signal = any(
+            value is not None
+            for value in (
+                feature_vector.ear_score,
+                feature_vector.gaze_on_screen,
+                feature_vector.hand_on_chin,
+                feature_vector.head_tilt_angle,
+            )
+        )
         self.session_service.log_focus_event(
             session_id=session_id,
             user_id=user_id,
             focus_score=focus_score,
-            source="text",
+            source="camera_text" if has_camera_signal else "text",
             state_label=state_estimate.state.value,
         )
 
@@ -73,13 +82,24 @@ class BehaviorService:
                 "question_density": feature_vector.question_density,
                 "confusion_score": feature_vector.confusion_score,
                 "topic_stability": feature_vector.topic_stability,
+                "topic_confidence": feature_vector.topic_confidence,
                 "semantic_retry_score": feature_vector.semantic_retry_score,
                 "help_seeking_score": feature_vector.help_seeking_score,
+                "help_seeking_semantic_score": feature_vector.help_seeking_semantic_score,
+                "help_seeking_classifier_score": feature_vector.help_seeking_classifier_score,
                 "answer_commitment_score": feature_vector.answer_commitment_score,
+                "answer_commitment_semantic_score": feature_vector.answer_commitment_semantic_score,
+                "answer_commitment_classifier_score": feature_vector.answer_commitment_classifier_score,
+                "fatigue_text_score": feature_vector.fatigue_text_score,
+                "ear_score": feature_vector.ear_score,
+                "gaze_on_screen": feature_vector.gaze_on_screen,
+                "hand_on_chin": feature_vector.hand_on_chin,
+                "head_tilt_angle": feature_vector.head_tilt_angle,
             },
             "deviation_features": state_estimate.deviation_features,
             "state_scores": state_estimate.state_scores,
             "state_probabilities": state_estimate.state_probabilities,
+            "fatigue_text_score": feature_vector.fatigue_text_score,
             "reason_summary": self._build_reason_summary(state_estimate),
         }
         self.session_service.log_behavior_event(
@@ -155,6 +175,7 @@ class BehaviorService:
                     "metadata": {
                         "semantic_retry_score": f.semantic_retry_score,
                         "retry_count": f.retry_count,
+                        "topic_confidence": f.topic_confidence,
                     },
                 }
             )
@@ -184,6 +205,8 @@ class BehaviorService:
                     "severity": round(min(1.0, f.help_seeking_score), 3),
                     "metadata": {
                         "help_seeking_score": f.help_seeking_score,
+                        "help_seeking_semantic_score": f.help_seeking_semantic_score,
+                        "help_seeking_classifier_score": f.help_seeking_classifier_score,
                         "answer_commitment_score": f.answer_commitment_score,
                     },
                 }
@@ -198,6 +221,31 @@ class BehaviorService:
                     "topic": f.topic,
                     "severity": round(min(1.0, f.answer_commitment_score), 3),
                     "metadata": {
+                        "answer_commitment_score": f.answer_commitment_score,
+                        "answer_commitment_semantic_score": f.answer_commitment_semantic_score,
+                        "answer_commitment_classifier_score": f.answer_commitment_classifier_score,
+                    },
+                }
+            )
+
+        if f.fatigue_text_score >= 0.45:
+            match_type = "hybrid_text_match"
+            if f.fatigue_text_score >= 0.75:
+                match_type = "explicit_fatigue_phrase"
+            elif f.fatigue_text_score < 0.58:
+                match_type = "semantic_fatigue_match"
+
+            events.append(
+                {
+                    "event_type": "fatigue_text_signal",
+                    "state_before": None,
+                    "state_after": estimate.state.value,
+                    "topic": f.topic,
+                    "severity": round(min(1.0, f.fatigue_text_score), 3),
+                    "metadata": {
+                        "fatigue_text_score": f.fatigue_text_score,
+                        "match_type": match_type,
+                        "confusion_score": f.confusion_score,
                         "answer_commitment_score": f.answer_commitment_score,
                     },
                 }
@@ -253,8 +301,10 @@ class BehaviorService:
                     "state_before": None,
                     "state_after": estimate.state.value,
                     "topic": f.topic,
-                    "severity": 0.20,
-                    "metadata": {},
+                    "severity": round(min(1.0, max(0.2, f.topic_confidence)), 3),
+                    "metadata": {
+                        "topic_confidence": f.topic_confidence,
+                    },
                 }
             )
 

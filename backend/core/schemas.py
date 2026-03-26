@@ -168,6 +168,30 @@ class CameraSignal(BaseModel):
     head_tilt_angle: Optional[float] = None  # Baş eğimi (derece)
 
 
+class CameraFrameRequest(BaseModel):
+    """POST /camera/frame - tarayicidan gelen tek kamera frame'i."""
+    session_id: str
+    user_id: str
+    image_base64: str
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+
+class CameraStatusResponse(BaseModel):
+    """Frontend'in kamera izin/aktiflik gosterimi icin backend runtime ozetidir."""
+    session_id: str
+    status: str = "idle"
+    available: bool = False
+    active: bool = False
+    face_detected: bool = False
+    backend_state: Optional[str] = None
+    attention_score: Optional[float] = None
+    processing_ms: Optional[float] = None
+    frame_id: int = 0
+    signal: Optional[CameraSignal] = None
+    last_updated_at: Optional[datetime] = None
+    error: Optional[str] = None
+
+
 class BehaviorSignal(BaseModel):
     """
     Passive Tracking (K3) — kamerasız sinyal.
@@ -182,9 +206,15 @@ class BehaviorSignal(BaseModel):
     question_density: float = 0.0         # Mesajdaki soru yoğunluğu
     confusion_score: float = 0.0          # Yardım/karışıklık sinyali
     topic_stability: float = 1.0          # Son mesajlarla konu sürekliliği
+    topic_confidence: float = 0.0         # Topic label bank ile bulunan eslesme gucu
     semantic_retry_score: float = 0.0     # Önceki mesajlara anlamsal tekrar benzerliği
     help_seeking_score: float = 0.0       # Dogrudan yardim/cevap talebi yogunlugu
+    help_seeking_semantic_score: float = 0.0
+    help_seeking_classifier_score: float = 0.0
     answer_commitment_score: float = 0.0  # Kendi deneme ve dusunme eforu sinyali
+    answer_commitment_semantic_score: float = 0.0
+    answer_commitment_classifier_score: float = 0.0
+    fatigue_text_score: float = 0.0       # Acik yorgunluk/bitkinlik dili sinyali
 
 
 class FeatureVector(BaseModel):
@@ -205,9 +235,15 @@ class FeatureVector(BaseModel):
     question_density: float = 0.0
     confusion_score: float = 0.0
     topic_stability: float = 1.0
+    topic_confidence: float = 0.0
     semantic_retry_score: float = 0.0
     help_seeking_score: float = 0.0
+    help_seeking_semantic_score: float = 0.0
+    help_seeking_classifier_score: float = 0.0
     answer_commitment_score: float = 0.0
+    answer_commitment_semantic_score: float = 0.0
+    answer_commitment_classifier_score: float = 0.0
+    fatigue_text_score: float = 0.0
 
     # Kamera sinyalleri (opsiyonel)
     ear_score: Optional[float] = None

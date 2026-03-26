@@ -17,6 +17,7 @@ from backend.core.config import settings
 from backend.core import database as database_module
 from backend.core.database import SessionLocal, configure_database
 from backend.core.database import UserProfileRecord
+from backend.core.schemas import CameraSignal, CameraStatusResponse
 
 
 class ApiIntegrationTests(unittest.TestCase):
@@ -218,6 +219,167 @@ class ApiIntegrationTests(unittest.TestCase):
         trend_payload = trend_response.json()
         self.assertEqual(trend_payload["total_sessions"], 1)
         self.assertEqual(len(trend_payload["points"]), 1)
+
+    def test_camera_frame_endpoint_marks_session_camera_used(self) -> None:
+        start_response = self.client.post(
+            "/session/start",
+            json={
+                "user_id": "camera_user",
+                "topic": "geometri",
+                "camera_enabled": False,
+            },
+        )
+        self.assertEqual(start_response.status_code, 200)
+        session_id = start_response.json()["session_id"]
+
+        fake_status = CameraStatusResponse(
+            session_id=session_id,
+            status="active",
+            available=True,
+            active=True,
+            face_detected=True,
+            backend_state="FOCUSED",
+            attention_score=0.83,
+            processing_ms=22.5,
+            frame_id=3,
+            signal=CameraSignal(
+                ear_score=0.31,
+                gaze_on_screen=True,
+                hand_on_chin=False,
+                head_tilt_angle=4.0,
+            ),
+        )
+
+        with patch(
+            "backend.api.routers.camera.camera_runtime_service.process_frame",
+            return_value=fake_status,
+        ):
+            response = self.client.post(
+                "/camera/frame",
+                json={
+                    "session_id": session_id,
+                    "user_id": "camera_user",
+                    "image_base64": "data:image/jpeg;base64,ZmFrZQ==",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["active"])
+
+        dashboard_response = self.client.get(f"/dashboard/{session_id}")
+        self.assertEqual(dashboard_response.status_code, 200)
+        self.assertTrue(dashboard_response.json()["camera_used"])
+
+    def test_chat_uses_latest_camera_signal_in_persisted_snapshot(self) -> None:
+        start_response = self.client.post(
+            "/session/start",
+            json={
+                "user_id": "camera_chat_user",
+                "topic": "trigonometri",
+                "camera_enabled": True,
+            },
+        )
+        self.assertEqual(start_response.status_code, 200)
+        session_id = start_response.json()["session_id"]
+
+        with patch(
+            "backend.api.routers.chat.camera_runtime_service.get_camera_signal",
+            return_value=CameraSignal(
+                ear_score=0.18,
+                gaze_on_screen=False,
+                hand_on_chin=True,
+                head_tilt_angle=29.0,
+            ),
+        ):
+            chat_response = self.client.post(
+                "/chat",
+                json=self._chat_payload(
+                    session_id,
+                    "camera_chat_user",
+                    "Sinus grafiginde neden faz kaymasi oluyor?",
+                    datetime(2026, 3, 26, 13, 0, 0),
+                ),
+            )
+
+        self.assertEqual(chat_response.status_code, 200)
+
+        dashboard_response = self.client.get(f"/dashboard/{session_id}")
+        self.assertEqual(dashboard_response.status_code, 200)
+        latest_state = dashboard_response.json()["latest_state_analysis"]
+        self.assertIsNotNone(latest_state)
+        feature_vector = latest_state["feature_vector"]
+        self.assertEqual(feature_vector["ear_score"], 0.18)
+        self.assertFalse(feature_vector["gaze_on_screen"])
+        self.assertTrue(feature_vector["hand_on_chin"])
+        self.assertEqual(feature_vector["head_tilt_angle"], 29.0)
+
+    def test_welcome_prefers_topic_matched_session_over_latest_unrelated_session(self) -> None:
+        math_start = self.client.post(
+            "/session/start",
+            json={
+                "user_id": "resume_user",
+                "topic": "matematik",
+                "camera_enabled": False,
+            },
+        )
+        self.assertEqual(math_start.status_code, 200)
+        math_session_id = math_start.json()["session_id"]
+
+        math_chat = self.client.post(
+            "/chat",
+            json=self._chat_payload(
+                math_session_id,
+                "resume_user",
+                "Limit sorusunda epsilon adimini tekrar edelim.",
+                datetime(2026, 3, 26, 9, 0, 0),
+            ),
+        )
+        self.assertEqual(math_chat.status_code, 200)
+        math_end = self.client.post(
+            "/session/end",
+            json={
+                "session_id": math_session_id,
+                "user_id": "resume_user",
+            },
+        )
+        self.assertEqual(math_end.status_code, 200)
+
+        python_start = self.client.post(
+            "/session/start",
+            json={
+                "user_id": "resume_user",
+                "topic": "python",
+                "camera_enabled": False,
+            },
+        )
+        self.assertEqual(python_start.status_code, 200)
+        python_session_id = python_start.json()["session_id"]
+
+        python_chat = self.client.post(
+            "/chat",
+            json=self._chat_payload(
+                python_session_id,
+                "resume_user",
+                "Python list comprehension neden boyle calisiyor?",
+                datetime(2026, 3, 26, 10, 0, 0),
+            ),
+        )
+        self.assertEqual(python_chat.status_code, 200)
+        python_end = self.client.post(
+            "/session/end",
+            json={
+                "session_id": python_session_id,
+                "user_id": "resume_user",
+            },
+        )
+        self.assertEqual(python_end.status_code, 200)
+
+        welcome_response = self.client.get("/welcome/resume_user?topic=matematik")
+        self.assertEqual(welcome_response.status_code, 200)
+        welcome_payload = welcome_response.json()
+
+        self.assertEqual(welcome_payload["last_session"]["session_id"], math_session_id)
+        self.assertEqual(welcome_payload["last_session"]["topic"], "matematik")
 
     def _fake_generate_response(self, *args, **kwargs) -> str:
         intervention = kwargs.get("intervention")

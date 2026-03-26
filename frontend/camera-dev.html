@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FocusAI Camera Dev</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f4f7fb;
+        --panel: rgba(255, 255, 255, 0.92);
+        --border: #d7e0ea;
+        --text: #0f172a;
+        --muted: #5b6b80;
+        --accent: #0f766e;
+        --accent-2: #1d4ed8;
+        --danger: #b91c1c;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+        background:
+          radial-gradient(circle at top left, rgba(29, 78, 216, 0.08), transparent 28%),
+          linear-gradient(140deg, #eef6ff 0%, #f7fbff 48%, #f2faf5 100%);
+        color: var(--text);
+      }
+
+      main {
+        width: min(980px, calc(100vw - 32px));
+        margin: 24px auto;
+        display: grid;
+        gap: 18px;
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 24px;
+        padding: 20px;
+        box-shadow: 0 18px 46px rgba(15, 23, 42, 0.08);
+      }
+
+      h1,
+      h2,
+      p {
+        margin: 0;
+      }
+
+      .subtitle {
+        margin-top: 8px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 12px;
+      }
+
+      label {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        font-size: 13px;
+        color: var(--muted);
+        font-weight: 700;
+      }
+
+      input {
+        width: 100%;
+        border: 1px solid #c5d2e1;
+        border-radius: 14px;
+        padding: 12px 13px;
+        font: inherit;
+        color: var(--text);
+        background: white;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 14px;
+      }
+
+      button {
+        border: none;
+        border-radius: 14px;
+        padding: 12px 16px;
+        font: inherit;
+        font-weight: 800;
+        cursor: pointer;
+      }
+
+      button.primary {
+        background: var(--accent-2);
+        color: white;
+      }
+
+      button.secondary {
+        background: var(--accent);
+        color: white;
+      }
+
+      button.danger {
+        background: var(--danger);
+        color: white;
+      }
+
+      button.ghost {
+        background: white;
+        color: var(--text);
+        border: 1px solid #c5d2e1;
+      }
+
+      button:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+
+      .status-list {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      .status-card {
+        background: #f8fbff;
+        border: 1px solid #dbe6f2;
+        border-radius: 16px;
+        padding: 12px;
+      }
+
+      .status-card strong {
+        display: block;
+        font-size: 11px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+
+      .value {
+        font-size: 15px;
+        font-weight: 800;
+      }
+
+      pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-family: Consolas, "SFMono-Regular", monospace;
+        font-size: 12px;
+        line-height: 1.5;
+        color: #1e293b;
+      }
+
+      .log {
+        max-height: 320px;
+        overflow: auto;
+        background: #0f172a;
+        color: #dbeafe;
+        border-radius: 16px;
+        padding: 14px;
+      }
+
+      video,
+      canvas {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="panel">
+        <h1>FocusAI Camera Dev Page</h1>
+        <p class="subtitle">
+          Bu sayfa frontend + backend kamera akisini test etmek icin eklendi.
+          Kamerayi acar, gizli frame gonderir, `/camera/frame` ve `/chat` davranisini gozlemletir.
+        </p>
+      </section>
+
+      <section class="panel">
+        <h2>Session Setup</h2>
+        <div class="grid" style="margin-top: 14px">
+          <label>
+            API Base
+            <input id="apiBase" value="http://127.0.0.1:8000" />
+          </label>
+          <label>
+            User ID
+            <input id="userId" value="camera_dev_user" />
+          </label>
+          <label>
+            Topic
+            <input id="topic" value="geometri" />
+          </label>
+          <label>
+            Test Message
+            <input id="message" value="Ucgenlerde aci ortay neden bu noktada kesişiyor?" />
+          </label>
+        </div>
+
+        <div class="actions">
+          <button id="startSessionBtn" class="primary">Oturum Baslat</button>
+          <button id="endSessionBtn" class="danger" disabled>Oturumu Kapat</button>
+          <button id="sendChatBtn" class="ghost" disabled>Test Chat Gonder</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Camera Control</h2>
+        <div class="actions">
+          <button id="startCameraBtn" class="secondary" disabled>Kamerayi Ac</button>
+          <button id="stopCameraBtn" class="ghost" disabled>Kamerayi Kapat</button>
+          <button id="statusBtn" class="ghost" disabled>Backend Status Cek</button>
+        </div>
+
+        <div class="status-list">
+          <div class="status-card">
+            <strong>Session ID</strong>
+            <div id="sessionIdValue" class="value">-</div>
+          </div>
+          <div class="status-card">
+            <strong>Permission</strong>
+            <div id="permissionValue" class="value">idle</div>
+          </div>
+          <div class="status-card">
+            <strong>Stream</strong>
+            <div id="streamValue" class="value">kapali</div>
+          </div>
+          <div class="status-card">
+            <strong>Backend</strong>
+            <div id="backendValue" class="value">bekliyor</div>
+          </div>
+          <div class="status-card">
+            <strong>Attention</strong>
+            <div id="attentionValue" class="value">-</div>
+          </div>
+          <div class="status-card">
+            <strong>Frame ID</strong>
+            <div id="frameValue" class="value">0</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Last Camera Status</h2>
+        <pre id="cameraStatusDump">Henüz veri yok.</pre>
+      </section>
+
+      <section class="panel">
+        <h2>Last Chat Response</h2>
+        <pre id="chatDump">Henüz chat gönderilmedi.</pre>
+      </section>
+
+      <section class="panel">
+        <h2>Log</h2>
+        <div class="log">
+          <pre id="logDump"></pre>
+        </div>
+      </section>
+
+      <video id="cameraVideo" autoplay playsinline muted></video>
+      <canvas id="cameraCanvas"></canvas>
+    </main>
+
+    <script type="module">
+      const byId = (id) => document.getElementById(id);
+
+      const apiBaseInput = byId("apiBase");
+      const userIdInput = byId("userId");
+      const topicInput = byId("topic");
+      const messageInput = byId("message");
+
+      const startSessionBtn = byId("startSessionBtn");
+      const endSessionBtn = byId("endSessionBtn");
+      const sendChatBtn = byId("sendChatBtn");
+      const startCameraBtn = byId("startCameraBtn");
+      const stopCameraBtn = byId("stopCameraBtn");
+      const statusBtn = byId("statusBtn");
+
+      const sessionIdValue = byId("sessionIdValue");
+      const permissionValue = byId("permissionValue");
+      const streamValue = byId("streamValue");
+      const backendValue = byId("backendValue");
+      const attentionValue = byId("attentionValue");
+      const frameValue = byId("frameValue");
+      const cameraStatusDump = byId("cameraStatusDump");
+      const chatDump = byId("chatDump");
+      const logDump = byId("logDump");
+
+      const video = byId("cameraVideo");
+      const canvas = byId("cameraCanvas");
+
+      let sessionId = null;
+      let stream = null;
+      let intervalId = null;
+      let uploading = false;
+
+      function log(message) {
+        const stamp = new Date().toLocaleTimeString();
+        logDump.textContent = `[${stamp}] ${message}\n` + logDump.textContent;
+      }
+
+      function setPermission(text) {
+        permissionValue.textContent = text;
+      }
+
+      function setStream(text) {
+        streamValue.textContent = text;
+      }
+
+      function setBackend(status) {
+        backendValue.textContent = status;
+      }
+
+      function setSession(id) {
+        sessionId = id;
+        sessionIdValue.textContent = id || "-";
+        endSessionBtn.disabled = !id;
+        sendChatBtn.disabled = !id;
+        startCameraBtn.disabled = !id;
+        stopCameraBtn.disabled = !stream;
+        statusBtn.disabled = !id;
+      }
+
+      function updateCameraStatus(status) {
+        cameraStatusDump.textContent = JSON.stringify(status, null, 2);
+        setBackend(status?.status || "bekliyor");
+        attentionValue.textContent =
+          status?.attention_score != null
+            ? `%${Math.round(status.attention_score * 100)}`
+            : "-";
+        frameValue.textContent = String(status?.frame_id ?? 0);
+      }
+
+      async function request(path, options = {}) {
+        const response = await fetch(`${apiBaseInput.value}${path}`, {
+          headers: {
+            "Content-Type": "application/json",
+            ...(options.headers || {}),
+          },
+          ...options,
+        });
+
+        const text = await response.text();
+        const data = text ? JSON.parse(text) : {};
+        if (!response.ok) {
+          throw new Error(data?.detail || `HTTP ${response.status}`);
+        }
+        return data;
+      }
+
+      async function startSession() {
+        const payload = await request("/session/start", {
+          method: "POST",
+          body: JSON.stringify({
+            user_id: userIdInput.value.trim(),
+            topic: topicInput.value.trim() || null,
+            camera_enabled: false,
+          }),
+        });
+        setSession(payload.session_id);
+        log(`Session baslatildi: ${payload.session_id}`);
+      }
+
+      async function endSession() {
+        if (!sessionId) return;
+        await stopCamera();
+        const payload = await request("/session/end", {
+          method: "POST",
+          body: JSON.stringify({
+            session_id: sessionId,
+            user_id: userIdInput.value.trim(),
+          }),
+        });
+        log(`Session kapatildi: ${JSON.stringify(payload)}`);
+        setSession(null);
+      }
+
+      async function sendChat() {
+        if (!sessionId) return;
+        const payload = await request("/chat", {
+          method: "POST",
+          body: JSON.stringify({
+            session_id: sessionId,
+            user_id: userIdInput.value.trim(),
+            content: messageInput.value.trim(),
+            channel: "text",
+          }),
+        });
+        chatDump.textContent = JSON.stringify(payload, null, 2);
+        log(`Chat response alindi. current_state=${payload.current_state}`);
+      }
+
+      async function fetchStatus() {
+        if (!sessionId) return;
+        const payload = await request(`/camera/${sessionId}/status`, {
+          method: "GET",
+          headers: {},
+        });
+        updateCameraStatus(payload);
+        log(`Status cekildi. backend=${payload.status}, active=${payload.active}`);
+      }
+
+      async function pushFrame() {
+        if (!sessionId || !stream || uploading || video.readyState < 2) return;
+
+        uploading = true;
+        try {
+          const width = 320;
+          const height = Math.max(
+            180,
+            Math.round(width / Math.max(1, video.videoWidth || 16) * (video.videoHeight || 9))
+          );
+
+          canvas.width = width;
+          canvas.height = height;
+          const context = canvas.getContext("2d");
+          if (!context) return;
+
+          context.drawImage(video, 0, 0, width, height);
+          const payload = await request("/camera/frame", {
+            method: "POST",
+            body: JSON.stringify({
+              session_id: sessionId,
+              user_id: userIdInput.value.trim(),
+              image_base64: canvas.toDataURL("image/jpeg", 0.72),
+            }),
+          });
+          updateCameraStatus(payload);
+        } catch (error) {
+          log(`Frame gonderme hatasi: ${error.message}`);
+          setBackend("error");
+        } finally {
+          uploading = false;
+        }
+      }
+
+      async function startCamera() {
+        if (!sessionId) {
+          log("Once session baslat.");
+          return;
+        }
+
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              width: { ideal: 640 },
+              height: { ideal: 480 },
+              facingMode: "user",
+            },
+            audio: false,
+          });
+          video.srcObject = stream;
+          await video.play();
+          setPermission("granted");
+          setStream("acik");
+          stopCameraBtn.disabled = false;
+          log("Kamera izni verildi ve stream acildi.");
+
+          await pushFrame();
+          intervalId = window.setInterval(() => {
+            void pushFrame();
+          }, 1200);
+        } catch (error) {
+          setPermission(error.name === "NotAllowedError" ? "denied" : "error");
+          log(`Kamera acilamadi: ${error.message}`);
+        }
+      }
+
+      async function stopCamera() {
+        if (intervalId != null) {
+          clearInterval(intervalId);
+          intervalId = null;
+        }
+
+        if (stream) {
+          stream.getTracks().forEach((track) => track.stop());
+          stream = null;
+        }
+
+        video.srcObject = null;
+        setStream("kapali");
+        stopCameraBtn.disabled = true;
+        log("Kamera stream kapatildi.");
+      }
+
+      startSessionBtn.addEventListener("click", () => void startSession());
+      endSessionBtn.addEventListener("click", () => void endSession());
+      sendChatBtn.addEventListener("click", () => void sendChat());
+      startCameraBtn.addEventListener("click", () => void startCamera());
+      stopCameraBtn.addEventListener("click", () => void stopCamera());
+      statusBtn.addEventListener("click", () => void fetchStatus());
+
+      log("Hazir. Vite dev server uzerinden /camera-dev.html olarak ac.");
+    </script>
+  </body>
+</html>

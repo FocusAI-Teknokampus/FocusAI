@@ -45,6 +45,13 @@ class ResponsePolicyService:
         user_profile: Optional[UserProfile],
         baseline_profile: dict,
     ) -> ResponsePolicyMode:
+        fatigue_text_score = float(getattr(feature_vector, "fatigue_text_score", 0.0) or 0.0)
+        ranked_states = sorted(
+            (estimate.state_probabilities or {}).items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        fatigued_top_two = any(label == UserState.FATIGUED.value for label, _ in ranked_states[:2])
         work_style = baseline_profile.get("work_style", {}) if baseline_profile else {}
         challenge_tolerance = (
             user_profile.challenge_tolerance
@@ -64,6 +71,9 @@ class ResponsePolicyService:
             if user_profile
             else work_style.get("prefers_direct_explanation", False)
         )
+
+        if fatigue_text_score >= 0.58 and fatigued_top_two:
+            return ResponsePolicyMode.RECOVERY
 
         if estimate.confidence < estimate.threshold or estimate.uncertainty_signal >= 0.6:
             return ResponsePolicyMode.CLARIFY
@@ -121,6 +131,8 @@ class ResponsePolicyService:
             signals.append((1.0 - feature_vector.topic_stability, "low topic stability"))
         if feature_vector.confusion_score >= 0.4:
             signals.append((feature_vector.confusion_score, "high confusion"))
+        if feature_vector.fatigue_text_score >= 0.45:
+            signals.append((feature_vector.fatigue_text_score, "explicit fatigue language"))
         if feature_vector.answer_commitment_score >= 0.55:
             signals.append((feature_vector.answer_commitment_score, "strong answer commitment"))
 
@@ -155,9 +167,14 @@ class ResponsePolicyService:
                 "Kullanici kendi denemesini surduruyor ama kavrami netlestirmekte zorlaniyor."
             )
 
+        if feature_vector.fatigue_text_score >= 0.55:
+            reasons.append(
+                "Kullanici mesajinda acik yorgunluk ifade ediyor; tonun sakinlesmesi ve hedefin kuculmesi gerekiyor."
+            )
+
         if feature_vector.topic_stability <= 0.35:
             reasons.append(
-                "Mesajlar alt problemler arasinda sicrıyor; konu surekliligi zayif."
+                "Mesajlar alt problemler arasinda sicrama var; konu surekliligi zayif."
             )
 
         if not reasons and dominant_signals:

@@ -20,6 +20,7 @@ from typing import TypedDict, Optional
 from langgraph.graph import StateGraph, END
 
 from backend.core.schemas import (
+    CameraSignal,
     ChatMessage,
     ChatResponse,
     FeatureVector,
@@ -60,6 +61,7 @@ _response_policy_service = ResponsePolicyService()
 
 class MentorGraphState(TypedDict):
     message: ChatMessage
+    camera_signal: Optional[CameraSignal]
 
     session_context: Optional[ShortTermContext]
     user_profile: Optional[UserProfile]
@@ -131,7 +133,7 @@ def feature_node(state: MentorGraphState) -> dict:
         message_content=msg.content,
         message_timestamp=msg.timestamp,
         channel=msg.channel,
-        camera_signal=None,   # Kamera sinyali daha sonra bağlanabilir
+        camera_signal=state.get("camera_signal"),
     )
 
     return {"feature_vector": feature}
@@ -312,6 +314,7 @@ def response_node(state: MentorGraphState) -> dict:
         message=state["message"],
         session_context=state.get("session_context"),
         user_profile=state.get("user_profile"),
+        feature_vector=state.get("feature_vector"),
         rag_context=state.get("rag_context"),
         intervention=state.get("intervention"),
         state_estimate=state.get("state_estimate"),

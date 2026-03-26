@@ -13,6 +13,7 @@ from backend.core.database import (
     SessionReportRecord,
     BehaviorEventRecord,
 )
+from backend.state.semantic_features import SemanticFeatureProvider, cosine_similarity, normalize_text
 
 
 class HistoryService:
@@ -22,6 +23,7 @@ class HistoryService:
 
     def __init__(self, db: Session):
         self.db = db
+        self._semantic_provider = SemanticFeatureProvider.from_settings()
 
     def get_user_sessions(self, user_id: str, limit: int = 30) -> list[dict[str, Any]]:
         sessions = (
@@ -195,30 +197,60 @@ class HistoryService:
         }
 
     def get_last_session_report(self, user_id: str) -> tuple[Optional[SessionRecord], Optional[SessionReportRecord]]:
-        session = (
+        return self.get_best_resume_session(user_id=user_id, topic=None)
+
+    def get_best_resume_session(
+        self,
+        user_id: str,
+        topic: str | None,
+    ) -> tuple[Optional[SessionRecord], Optional[SessionReportRecord]]:
+        ended_sessions = (
             self.db.query(SessionRecord)
             .filter(SessionRecord.user_id == user_id, SessionRecord.ended_at.isnot(None))
             .order_by(SessionRecord.ended_at.desc())
-            .first()
+            .all()
         )
 
-        if session is None:
-            session = (
+        fallback_session = ended_sessions[0] if ended_sessions else None
+        if fallback_session is None:
+            fallback_session = (
                 self.db.query(SessionRecord)
                 .filter(SessionRecord.user_id == user_id)
                 .order_by(SessionRecord.started_at.desc())
                 .first()
             )
 
-        if session is None:
+        if fallback_session is None:
             return None, None
+
+        selected_session = fallback_session
+        trimmed_topic = (topic or "").strip()
+        if trimmed_topic:
+            target_normalized = normalize_text(trimmed_topic)
+            target_label, _ = self._semantic_provider.detect_topic(trimmed_topic)
+            target_embedding = self._semantic_provider.embed_text(trimmed_topic)
+
+            best_score = -1.0
+            for candidate in ended_sessions or [fallback_session]:
+                score = self._resume_match_score(
+                    session=candidate,
+                    target_normalized=target_normalized,
+                    target_label=target_label,
+                    target_embedding=target_embedding,
+                )
+                if score > best_score:
+                    best_score = score
+                    selected_session = candidate
+
+            if best_score < 1.0:
+                selected_session = fallback_session
 
         report = (
             self.db.query(SessionReportRecord)
-            .filter(SessionReportRecord.session_id == session.session_id)
+            .filter(SessionReportRecord.session_id == selected_session.session_id)
             .first()
         )
-        return session, report
+        return selected_session, report
 
     def get_latest_state_snapshot(self, session_id: str) -> Optional[dict[str, Any]]:
         row = (
@@ -329,3 +361,42 @@ class HistoryService:
             }
             for event in reversed(events)
         ]
+
+    def _resume_match_score(
+        self,
+        session: SessionRecord,
+        target_normalized: str,
+        target_label: str | None,
+        target_embedding: list[float],
+    ) -> float:
+        session_parts = [part.strip() for part in (session.topic, session.subtopic) if part and part.strip()]
+        if not session_parts:
+            return 0.0
+
+        session_text = " ".join(session_parts)
+        session_normalized = normalize_text(session_text)
+        session_label, _ = self._semantic_provider.detect_topic(session_text)
+        session_embedding = self._semantic_provider.embed_text(session_text)
+
+        score = 0.0
+        if session_normalized == target_normalized:
+            score += 3.0
+        elif target_normalized and target_normalized in session_normalized:
+            score += 2.2
+
+        if target_label and session_label == target_label:
+            score += 1.2
+
+        score += cosine_similarity(target_embedding, session_embedding) * 1.3
+
+        if normalize_text(session.topic or "") == target_normalized:
+            score += 0.6
+        if normalize_text(session.subtopic or "") == target_normalized:
+            score += 0.4
+
+        recency_anchor = session.ended_at or session.started_at
+        if recency_anchor is not None:
+            age_days = max(0.0, (datetime.utcnow() - recency_anchor).total_seconds() / 86400)
+            score += max(0.0, 0.35 - min(0.35, age_days * 0.01))
+
+        return round(score, 4)

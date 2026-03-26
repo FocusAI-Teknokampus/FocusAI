@@ -6,6 +6,7 @@ authors = [
     { name = "FocusAI Team" }
 ]
 requires-python = ">=3.10"
+
 dependencies = [
     # Backend & API
     "fastapi>=0.110.0",

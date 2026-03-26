@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o"
     openai_vision_model: str = "gpt-4o"          # Fotoğraf analizi için
     openai_embedding_model: str = "text-embedding-3-small"
+    semantic_embedding_provider: str = "local"   # local | auto | openai
+    semantic_embedding_dimensions: int = 256
+    semantic_topic_threshold: float = 0.34
+    feature_classifier_enabled: bool = True
+    feature_classifier_blend_weight: float = 0.35
+    feature_classifier_model_path: str = "data/feature_classifier_model.json"
 
     # ── Kamera / CV Engine ────────────────────
     camera_id: int = 0

@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.routers import (
     analytics,
+    camera,
     chat,
     dashboard,
     feedback,
@@ -47,6 +48,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(session.router, prefix="/session", tags=["Session"])
+    app.include_router(camera.router, prefix="/camera", tags=["Camera"])
     app.include_router(chat.router, prefix="/chat", tags=["Chat"])
     app.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
     app.include_router(upload.router, prefix="/upload", tags=["Upload"])

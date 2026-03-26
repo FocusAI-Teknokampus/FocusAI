@@ -1,6 +1,7 @@
 import unittest
 from datetime import datetime, timedelta
 
+from backend.core.schemas import CameraSignal
 from backend.state.feature_extractor import FeatureExtractor
 
 
@@ -27,6 +28,7 @@ class FeatureExtractorTests(unittest.TestCase):
         self.assertGreaterEqual(second.retry_count, 1)
         self.assertEqual(second.topic, "programlama")
         self.assertGreaterEqual(second.help_seeking_score, 0.1)
+        self.assertGreaterEqual(second.help_seeking_classifier_score, 0.45)
         self.assertLessEqual(second.answer_commitment_score, 0.2)
 
     def test_confused_follow_up_exposes_confusion_and_topic_stability(self) -> None:
@@ -56,7 +58,66 @@ class FeatureExtractorTests(unittest.TestCase):
         )
 
         self.assertGreaterEqual(feature.answer_commitment_score, 0.3)
+        self.assertGreaterEqual(feature.answer_commitment_semantic_score, 0.1)
+        self.assertGreaterEqual(feature.answer_commitment_classifier_score, 0.45)
         self.assertGreaterEqual(feature.help_seeking_score, 0.0)
+
+    def test_topic_bank_detects_related_math_concepts_without_exact_keyword(self) -> None:
+        feature = self.extractor.extract(
+            session_id="s4",
+            message_content="Diferansiyel denklemde baslangic kosulunu nereye uygulayacagim?",
+            message_timestamp=datetime(2026, 3, 26, 11, 5, 0),
+        )
+
+        self.assertEqual(feature.topic, "matematik")
+        self.assertGreaterEqual(feature.topic_confidence, 0.34)
+        self.assertGreaterEqual(feature.help_seeking_score, 0.15)
+
+    def test_semantic_retry_handles_close_rephrase(self) -> None:
+        base_time = datetime(2026, 3, 26, 11, 10, 0)
+
+        self.extractor.extract(
+            session_id="s5",
+            message_content="Python API neden 500 hatasi veriyor?",
+            message_timestamp=base_time,
+        )
+        second = self.extractor.extract(
+            session_id="s5",
+            message_content="Bu API neden yine server hatasi donuyor?",
+            message_timestamp=base_time + timedelta(seconds=25),
+        )
+
+        self.assertEqual(second.topic, "programlama")
+        self.assertGreaterEqual(second.semantic_retry_score, 0.55)
+        self.assertGreaterEqual(second.retry_count, 1)
+
+    def test_camera_signal_is_mapped_into_feature_vector(self) -> None:
+        feature = self.extractor.extract(
+            session_id="s6",
+            message_content="Fonksiyon sorusunu cozuyorum.",
+            message_timestamp=datetime(2026, 3, 26, 11, 20, 0),
+            camera_signal=CameraSignal(
+                ear_score=0.19,
+                gaze_on_screen=False,
+                hand_on_chin=True,
+                head_tilt_angle=27.0,
+            ),
+        )
+
+        self.assertEqual(feature.ear_score, 0.19)
+        self.assertFalse(feature.gaze_on_screen)
+        self.assertTrue(feature.hand_on_chin)
+        self.assertEqual(feature.head_tilt_angle, 27.0)
+
+    def test_explicit_fatigue_language_raises_fatigue_text_score(self) -> None:
+        feature = self.extractor.extract(
+            session_id="s7",
+            message_content="Yoruldum, su an tam anlayamiyorum.",
+            message_timestamp=datetime(2026, 3, 26, 11, 30, 0),
+        )
+
+        self.assertGreater(feature.fatigue_text_score, 0.0)
+        self.assertGreaterEqual(feature.confusion_score, 0.1)
 
 
 if __name__ == "__main__":
