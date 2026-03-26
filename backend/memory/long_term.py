@@ -14,7 +14,10 @@ import json
 import logging
 from typing import Optional
 
-from mem0 import Memory
+try:
+    from mem0 import Memory
+except Exception:  # pragma: no cover - opsiyonel bagimlilik
+    Memory = None
 
 from backend.core.config import settings
 from backend.core.schemas import MemoryEntry, UserProfile
@@ -73,6 +76,8 @@ class LongTermMemory:
         # İlk çalıştırmada ChromaDB collection'ı oluşturur
         # Sonraki çalıştırmalarda mevcut collection'ı yükler
         try:
+            if Memory is None:
+                raise RuntimeError("mem0 paketi kurulu degil")
             self.client = Memory.from_config(_MEM0_CONFIG)
             self._available = True
         except Exception as e:

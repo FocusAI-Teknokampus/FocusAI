@@ -164,6 +164,10 @@ class BehaviorSignal(BaseModel):
     message_length: int                   # Mesaj uzunluğu (karakter)
     retry_count: int                      # Aynı konuda kaçıncı soru?
     topic: Optional[str] = None           # Tespit edilen konu etiketi
+    question_density: float = 0.0         # Mesajdaki soru yoğunluğu
+    confusion_score: float = 0.0          # Yardım/karışıklık sinyali
+    topic_stability: float = 1.0          # Son mesajlarla konu sürekliliği
+    semantic_retry_score: float = 0.0     # Önceki mesajlara anlamsal tekrar benzerliği
 
 
 class FeatureVector(BaseModel):
@@ -181,6 +185,10 @@ class FeatureVector(BaseModel):
     response_time_seconds: float
     message_length: int
     topic: Optional[str] = None
+    question_density: float = 0.0
+    confusion_score: float = 0.0
+    topic_stability: float = 1.0
+    semantic_retry_score: float = 0.0
 
     # Kamera sinyalleri (opsiyonel)
     ear_score: Optional[float] = None
@@ -202,9 +210,15 @@ class StateEstimate(BaseModel):
     """
     session_id: str
     state: UserState
+    predicted_state: UserState = UserState.UNKNOWN
     confidence: float = Field(ge=0.0, le=1.0)
+    decision_margin: float = 0.0
+    uncertainty_signal: float = 1.0
     learning_pattern: LearningPattern = LearningPattern.NORMAL
     threshold: float = 0.75              # Adaptive threshold — başta sabit
+    deviation_features: dict = Field(default_factory=dict)
+    state_scores: dict = Field(default_factory=dict)
+    state_probabilities: dict = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=datetime.now)
 
     @property
@@ -234,6 +248,8 @@ class MentorIntervention(BaseModel):
     triggered_by: UserState               # Hangi durumdan tetiklendi?
     learning_pattern: Optional[LearningPattern] = None
     confidence: float = Field(ge=0.0, le=1.0)
+    decision_reason: Optional[str] = None
+    policy_snapshot: dict = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=datetime.now)
 
 
@@ -313,6 +329,19 @@ class NoteUploadResponse(BaseModel):
     message: str
 
 
+class UploadedDocumentSummary(BaseModel):
+    """
+    GET /upload/documents/{user_id} endpoint'inin dondurdugu dokuman ozeti.
+    Bu model, UI'in veritabani satirlarina bagimli kalmamasini saglar.
+    """
+    filename: str
+    file_type: Optional[str] = None
+    file_size_bytes: Optional[int] = None
+    chunk_count: int = 0
+    indexed: bool = False
+    uploaded_at: datetime
+
+
 class RAGResult(BaseModel):
     """
     RAG Agent'ın not araması sonucu.
@@ -360,6 +389,34 @@ class SessionSummary(BaseModel):
     # Yarın için öneri
     recommended_topics: list[str] = Field(default_factory=list)
     mentor_note: Optional[str] = None    # Genel değerlendirme cümlesi
+
+
+# ─────────────────────────────────────────
+# HISTORY / CONTINUITY / FEEDBACK
+# Yeni faz 1 modülleri bu modelleri kullanır
+# ─────────────────────────────────────────
+
+class FeedbackRequest(BaseModel):
+    """POST /feedback isteği."""
+    user_id: str
+    session_id: Optional[str] = None
+    message_id: Optional[str] = None
+    feedback_type: str
+    target_type: Optional[str] = None
+    target_id: Optional[str] = None
+    intervention_type: Optional[str] = None
+    value: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class FeedbackResponse(BaseModel):
+    """POST /feedback sonucu."""
+    status: str = "recorded"
+    feedback_id: str
+    adaptive_threshold: Optional[float] = None
+    intervention_type: Optional[str] = None
+    intervention_success_rate: Optional[float] = None
+    behavior_change: Optional[dict] = None
 
 
 # ─────────────────────────────────────────

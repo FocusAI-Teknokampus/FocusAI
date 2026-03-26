@@ -113,7 +113,7 @@ def chat(
             intervention_type=intervention.intervention_type.value,
             message=intervention.message,
             triggered_by=intervention.triggered_by.value if intervention.triggered_by else None,
-            reason="Graph uncertainty/mentor flow sonucunda üretildi.",
+            reason=intervention.decision_reason or "Graph uncertainty/mentor flow sonucunda uretildi.",
             confidence=intervention.confidence,
             was_successful=None,
         )

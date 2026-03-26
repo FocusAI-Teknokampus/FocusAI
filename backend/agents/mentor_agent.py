@@ -10,8 +10,14 @@
 # Sahip: K1
 # Bağımlılıklar: schemas.py, prompts/*.j2, openai
 
+from __future__ import annotations
+
 from typing import Optional
-from openai import OpenAI
+
+try:
+    from openai import OpenAI
+except Exception:  # pragma: no cover - paket eksik oldugunda fallback
+    OpenAI = None
 
 from backend.core.config import settings
 from backend.core.schemas import (
@@ -40,8 +46,16 @@ class MentorAgent:
     """
 
     def __init__(self):
-        self.client = OpenAI(api_key=settings.openai_api_key)
+        self.client = None
         self.model = settings.openai_model
+
+    def _get_client(self):
+        if self.client is not None:
+            return self.client
+        if not settings.openai_api_key or OpenAI is None:
+            return None
+        self.client = OpenAI(api_key=settings.openai_api_key)
+        return self.client
 
     # ─────────────────────────────────────────────────────────────────
     # 1. MÜDAHALEYİ KİŞİSELLEŞTİR
@@ -72,20 +86,24 @@ class MentorAgent:
             user_profile=user_profile,
         )
 
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user",   "content": user_prompt},
-                ],
-                max_tokens=150,
-                temperature=0.7,
-            )
-            enriched_message = response.choices[0].message.content.strip()
-        except Exception:
-            # LLM hatası durumunda şablon mesajla devam et
+        client = self._get_client()
+        if client is None:
             enriched_message = intervention.message
+        else:
+            try:
+                response = client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    max_tokens=150,
+                    temperature=0.7,
+                )
+                enriched_message = response.choices[0].message.content.strip()
+            except Exception:
+                # LLM hatası durumunda şablon mesajla devam et
+                enriched_message = intervention.message
 
         return MentorIntervention(
             intervention_type=intervention.intervention_type,
@@ -93,6 +111,8 @@ class MentorAgent:
             triggered_by=intervention.triggered_by,
             learning_pattern=intervention.learning_pattern,
             confidence=intervention.confidence,
+            decision_reason=intervention.decision_reason,
+            policy_snapshot=intervention.policy_snapshot,
         )
 
     # ─────────────────────────────────────────────────────────────────
@@ -120,8 +140,12 @@ class MentorAgent:
             state_estimate=state_estimate,
         )
 
+        client = self._get_client()
+        if client is None:
+            return self._fallback_response(message, rag_context, intervention, state_estimate)
+
         try:
-            response = self.client.chat.completions.create(
+            response = client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -132,7 +156,13 @@ class MentorAgent:
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
-            return f"Bir sorun oluştu, tekrar dener misin? ({str(e)})"
+            fallback = self._fallback_response(
+                message,
+                rag_context,
+                intervention,
+                state_estimate,
+            )
+            return f"{fallback} (LLM fallback: {str(e)})"
 
     # ─────────────────────────────────────────────────────────────────
     # DYNAMIC PERSONA PROMPT
@@ -289,3 +319,31 @@ class MentorAgent:
         messages.append({"role": "user", "content": current_message})
 
         return messages
+
+    def _fallback_response(
+        self,
+        message: ChatMessage,
+        rag_context: Optional[str],
+        intervention: Optional[MentorIntervention],
+        state_estimate: Optional[StateEstimate],
+    ) -> str:
+        """
+        LLM hazir degilse minimum faydali cevap dondur.
+        """
+        if intervention and intervention.message:
+            return intervention.message
+
+        if rag_context:
+            snippet = rag_context.strip().splitlines()[0][:180]
+            return f"Senin notuna gore ilgili kisim su: {snippet}"
+
+        if state_estimate and state_estimate.state != UserState.FOCUSED:
+            return (
+                f"Su an {state_estimate.state.value} sinyali goruyorum. "
+                "Sorunu bir adim daha detaylandirirsan birlikte ilerleyelim."
+            )
+
+        return (
+            "Sorunu aldim. LLM baglantisi hazir degil ama istersen problemi "
+            "biraz daha acip adim adim ilerleyebiliriz."
+        )

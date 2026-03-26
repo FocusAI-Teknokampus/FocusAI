@@ -4,7 +4,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile, Depends
 from sqlalchemy.orm import Session
 
 from backend.rag.rag_agent import RAGAgent
-from backend.core.schemas import NoteUploadResponse
+from backend.core.schemas import NoteUploadResponse, UploadedDocumentSummary
 from backend.core.database import get_db, UploadedDocumentRecord
 
 router = APIRouter()
@@ -72,3 +72,35 @@ async def upload_pdf(
     db.commit()
 
     return result
+
+
+@router.get("/documents/{user_id}", response_model=list[UploadedDocumentSummary])
+def list_uploaded_documents(
+    user_id: str,
+    db: Session = Depends(get_db),
+) -> list[UploadedDocumentSummary]:
+    """
+    KullanÄ±cÄ±nÄ±n yÃ¼klediÄŸi PDF listesini dÃ¶ner.
+
+    Neden ayrÄ± endpoint?
+    Chat akÄ±ÅŸÄ± ile dosya listesini karÄ±ÅŸtÄ±rmak istemiyoruz.
+    UI bu endpoint'i Ã§aÄŸÄ±rÄ±p yalnÄ±zca kullanÄ±cÄ±nÄ±n notlarÄ±nÄ± listeleyebilir.
+    """
+    rows = (
+        db.query(UploadedDocumentRecord)
+        .filter(UploadedDocumentRecord.user_id == user_id)
+        .order_by(UploadedDocumentRecord.uploaded_at.desc())
+        .all()
+    )
+
+    return [
+        UploadedDocumentSummary(
+            filename=row.file_name,
+            file_type=row.file_type,
+            file_size_bytes=row.file_size_bytes,
+            chunk_count=row.chunk_count,
+            indexed=row.indexed,
+            uploaded_at=row.uploaded_at,
+        )
+        for row in rows
+    ]

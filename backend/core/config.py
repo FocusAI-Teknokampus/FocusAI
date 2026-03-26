@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     app_version: str = "2.0.0"
 
     # ── LLM ───────────────────────────────────
-    openai_api_key: str
+    openai_api_key: str = ""
     openai_model: str = "gpt-4o"
     openai_vision_model: str = "gpt-4o"          # Fotoğraf analizi için
     openai_embedding_model: str = "text-embedding-3-small"

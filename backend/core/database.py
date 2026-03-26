@@ -17,7 +17,9 @@ from sqlalchemy import (
     create_engine,
     Index,
 )
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy.pool import StaticPool
 from backend.core.config import settings
 
 
@@ -26,19 +28,51 @@ from backend.core.config import settings
 # ─────────────────────────────────────────────────────────────────
 
 is_sqlite = settings.database_url.startswith("sqlite")
-
-engine = create_engine(
-    settings.database_url,
-    connect_args={"check_same_thread": False} if is_sqlite else {},
-)
-
+engine: Engine | None = None
 SessionLocal = sessionmaker(
-    bind=engine,
     autocommit=False,
     autoflush=False,
 )
 
 Base = declarative_base()
+
+
+def _build_engine(database_url: str) -> Engine:
+    engine_kwargs = {
+        "connect_args": {"check_same_thread": False} if database_url.startswith("sqlite") else {},
+    }
+    if database_url in {"sqlite://", "sqlite:///:memory:"}:
+        engine_kwargs["poolclass"] = StaticPool
+
+    return create_engine(
+        database_url,
+        **engine_kwargs,
+    )
+
+
+def configure_database(database_url: str | None = None, force: bool = False) -> Engine:
+    """
+    Aktif veritabani baglantisini kurar veya yeniden kurar.
+
+    Testlerde izole DB kullanabilmek icin engine ve SessionLocal tek noktadan
+    yeniden baglanabilir.
+    """
+    global engine, is_sqlite
+
+    resolved_url = database_url or settings.database_url
+    active_url = str(engine.url) if engine is not None else None
+    if engine is not None and active_url == resolved_url and not force:
+        return engine
+
+    previous_engine = engine
+    engine = _build_engine(resolved_url)
+    SessionLocal.configure(bind=engine)
+    is_sqlite = resolved_url.startswith("sqlite")
+
+    if previous_engine is not None and previous_engine is not engine:
+        previous_engine.dispose()
+
+    return engine
 
 
 def generate_uuid() -> str:
@@ -191,6 +225,29 @@ class UserProfileRecord(Base):
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
 
 
+class UserBaselineRecord(Base):
+    """
+    Kullanıcının ilk ve sonraki oturumlardan türetilen kişisel baseline özeti.
+    """
+    __tablename__ = "user_baselines"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.user_id"), unique=True, nullable=False)
+
+    sample_session_count = Column(Integer, default=0, nullable=False)
+    avg_message_length = Column(Float, default=0.0, nullable=False)
+    avg_response_time_seconds = Column(Float, default=0.0, nullable=False)
+    avg_idle_gap_seconds = Column(Float, default=0.0, nullable=False)
+    avg_messages_per_session = Column(Float, default=0.0, nullable=False)
+    avg_session_duration_seconds = Column(Float, default=0.0, nullable=False)
+    avg_focus_score = Column(Float, nullable=True)
+    question_style = Column(String, nullable=True)
+    personalized_threshold = Column(Float, default=0.75, nullable=False)
+
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+
+
 class BehaviorEventRecord(Base):
     """
     Oturum sırasında tespit edilen davranış olaylarının kaydı.
@@ -249,6 +306,70 @@ class UploadedDocumentRecord(Base):
     uploaded_at = Column(DateTime, default=utcnow, nullable=False)
 
 
+class UserFeedbackRecord(Base):
+    """
+    Kullanıcıdan gelen tespit/müdahale geri bildirimleri.
+    """
+    __tablename__ = "user_feedback"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.user_id"), nullable=False)
+    session_id = Column(String, ForeignKey("sessions.session_id"), nullable=True)
+    message_id = Column(String, ForeignKey("messages.id"), nullable=True)
+
+    feedback_type = Column(String, nullable=False)
+    target_type = Column(String, nullable=True)
+    target_id = Column(String, nullable=True)
+    intervention_type = Column(String, nullable=True)
+    value = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+
+
+class InterventionPolicyRecord(Base):
+    """
+    Kullanıcı bazlı müdahale başarı özeti.
+    """
+    __tablename__ = "intervention_policy"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.user_id"), nullable=False)
+    intervention_type = Column(String, nullable=False)
+
+    total_count = Column(Integer, default=0, nullable=False)
+    success_count = Column(Integer, default=0, nullable=False)
+    failure_count = Column(Integer, default=0, nullable=False)
+    last_feedback_type = Column(String, nullable=True)
+    last_outcome = Column(Boolean, nullable=True)
+
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class InterventionEffectivenessRecord(Base):
+    """
+    Kullanıcı + state + müdahale bazında başarı istatistiği.
+    """
+    __tablename__ = "intervention_effectiveness"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.user_id"), nullable=False)
+    state_label = Column(String, nullable=False)
+    intervention_type = Column(String, nullable=False)
+
+    total_count = Column(Integer, default=0, nullable=False)
+    success_count = Column(Integer, default=0, nullable=False)
+    failure_count = Column(Integer, default=0, nullable=False)
+    recent_outcomes_json = Column(Text, default="[]", nullable=False)
+    last_feedback_type = Column(String, nullable=True)
+    last_outcome = Column(Boolean, nullable=True)
+    last_used_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+
+
 # ─────────────────────────────────────────────────────────────────
 # INDEXLER
 # ─────────────────────────────────────────────────────────────────
@@ -259,10 +380,15 @@ Index("ix_messages_timestamp", MessageRecord.timestamp)
 Index("ix_interventions_session_id", InterventionRecord.session_id)
 Index("ix_session_reports_session_id", SessionReportRecord.session_id)
 Index("ix_user_profiles_user_id", UserProfileRecord.user_id)
+Index("ix_user_baselines_user_id", UserBaselineRecord.user_id)
 Index("ix_behavior_events_session_id", BehaviorEventRecord.session_id)
 Index("ix_behavior_events_event_type", BehaviorEventRecord.event_type)
 Index("ix_focus_events_session_id", FocusEventRecord.session_id)
 Index("ix_uploaded_documents_user_id", UploadedDocumentRecord.user_id)
+Index("ix_user_feedback_user_id", UserFeedbackRecord.user_id)
+Index("ix_user_feedback_session_id", UserFeedbackRecord.session_id)
+Index("ux_intervention_policy_user_type", InterventionPolicyRecord.user_id, InterventionPolicyRecord.intervention_type, unique=True)
+Index("ux_intervention_effectiveness_user_state_type", InterventionEffectivenessRecord.user_id, InterventionEffectivenessRecord.state_label, InterventionEffectivenessRecord.intervention_type, unique=True)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -271,18 +397,25 @@ Index("ix_uploaded_documents_user_id", UploadedDocumentRecord.user_id)
 
 def init_db() -> None:
     """
-    Veritabanı tablolarını oluşturur.
+    Veritabanini secili engine ile hazirlar ve migration'lari calistirir.
     """
+    active_engine = configure_database()
+
     if is_sqlite:
         os.makedirs(settings.data_dir, exist_ok=True)
 
-    Base.metadata.create_all(bind=engine)
+    from backend.core.migrations import run_migrations
+
+    run_migrations(active_engine)
 
 
 def get_db() -> Generator[Session, None, None]:
     """
     FastAPI endpoint'leri için veritabanı oturumu sağlar.
     """
+    if engine is None:
+        configure_database()
+
     db = SessionLocal()
     try:
         yield db

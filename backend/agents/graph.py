@@ -60,6 +60,7 @@ class MentorGraphState(TypedDict):
 
     session_context: Optional[ShortTermContext]
     user_profile: Optional[UserProfile]
+    baseline_profile: Optional[dict]
 
     feature_vector: Optional[FeatureVector]
     state_estimate: Optional[StateEstimate]
@@ -88,16 +89,26 @@ def session_node(state: MentorGraphState) -> dict:
         - kullanıcı profili long-term memory'den alınır
     """
     from backend.agents.session_agent import SessionAgent
+    from backend.core.database import SessionLocal
+    from backend.services.baseline_service import BaselineService
 
     agent = SessionAgent()
     message = state["message"]
 
     context = agent.load_context(message.session_id)
     profile = agent.load_profile(message.user_id)
+    baseline_profile = None
+
+    db = SessionLocal()
+    try:
+        baseline_profile = BaselineService(db).get_state_model_baseline(message.user_id)
+    finally:
+        db.close()
 
     return {
         "session_context": context,
         "user_profile": profile,
+        "baseline_profile": baseline_profile,
     }
 
 
@@ -132,6 +143,7 @@ def state_node(state: MentorGraphState) -> dict:
     estimate = _state_model.predict(
         features=state["feature_vector"],
         adaptive_threshold=threshold,
+        baseline_profile=state.get("baseline_profile"),
     )
 
     return {"state_estimate": estimate}
@@ -149,12 +161,34 @@ def uncertainty_node(state: MentorGraphState) -> dict:
         estimate=state["state_estimate"],
         profile=state.get("user_profile"),
         session_id=state["message"].session_id,
+        policy_summary=_load_policy_summary(
+            user_id=state["message"].user_id,
+            estimate=state["state_estimate"],
+        ),
     )
 
     return {
         "should_intervene": intervention is not None,
         "intervention": intervention,
     }
+
+
+def _load_policy_summary(user_id: str, estimate: Optional[StateEstimate]) -> dict:
+    if estimate is None or estimate.state in [UserState.UNKNOWN, UserState.FOCUSED]:
+        return {}
+
+    from backend.core.database import SessionLocal
+    from backend.services.intervention_policy_service import InterventionPolicyService
+
+    db = SessionLocal()
+    try:
+        service = InterventionPolicyService(db)
+        return service.get_state_policy_summary(
+            user_id=user_id,
+            state_label=estimate.state.value,
+        )
+    finally:
+        db.close()
 
 
 def mentor_node(state: MentorGraphState) -> dict:
@@ -197,6 +231,10 @@ def clarify_node(state: MentorGraphState) -> dict:
         message=msg,
         triggered_by=estimate.state,
         confidence=estimate.confidence,
+        decision_reason=(
+            f"Confidence ({estimate.confidence}) kullanici esiginin ({estimate.threshold}) altinda kaldigi icin "
+            "dogrudan mudahale yerine aciklayici soru secildi."
+        ),
     )
 
     return {
@@ -278,8 +316,8 @@ def route_after_uncertainty(state: MentorGraphState) -> str:
     if intervention is None:
         return "rag_node"
 
-    # Confidence yeterliyse mentor müdahalesi zenginleştirilsin
-    if estimate and estimate.confidence >= 0.75:
+    # Confidence eşiği kullanıcıya özel threshold ile hizalı olsun.
+    if estimate and estimate.confidence >= estimate.threshold:
         return "mentor_node"
 
     # Confidence düşükse açıklayıcı soru

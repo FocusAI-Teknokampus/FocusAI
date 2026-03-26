@@ -31,6 +31,8 @@ def _empty_dashboard_response(session_id: str, user_id: str | None = None) -> di
         "intervention_count": 0,
         "focus_timeline": [],
         "behavior_timeline": [],
+        "latest_state_analysis": None,
+        "latest_intervention": None,
         "report": {
             "message_count": 0,
             "intervention_count": 0,
@@ -64,6 +66,14 @@ def get_session_summary(
     # 1) Aktif session RAM'de ise
     context = _active_sessions.get(session_id)
     if context is not None:
+        analytics = AnalyticsService(db)
+        dashboard = analytics.get_session_dashboard(session_id)
+        if dashboard is not None:
+            dashboard["current_state"] = context.current_state.value
+            dashboard["retry_count"] = context.retry_count
+            dashboard["source"] = "active_database"
+            return dashboard
+
         payload = _empty_dashboard_response(
             session_id=context.session_id,
             user_id=context.user_id,
