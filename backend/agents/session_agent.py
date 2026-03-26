@@ -21,6 +21,7 @@ from backend.core.schemas import (
 from backend.memory.long_term import LongTermMemory
 from backend.memory.short_term import ShortTermMemory, _sessions as _active_sessions
 from backend.services.analytics_service import AnalyticsService
+from backend.services.baseline_service import BaselineService
 from backend.services.session_service import SessionService
 
 
@@ -79,6 +80,8 @@ class SessionAgent:
         owns_session = db is None
         active_db = db or SessionLocal()
         memory_profile: Optional[UserProfile] = None
+        baseline_summary = BaselineService(active_db).get_user_baseline(user_id)
+        work_style = baseline_summary.get("work_style", {})
 
         try:
             profile = self.long_term.get_profile(user_id)
@@ -120,15 +123,47 @@ class SessionAgent:
                     ),
                     total_sessions=memory_profile.total_sessions if memory_profile else 0,
                     last_session_at=memory_profile.last_session_at if memory_profile else None,
+                    normal_message_length=baseline_summary.get("avg_message_length", 0.0),
+                    normal_response_delay_seconds=baseline_summary.get("avg_response_time_seconds", 0.0),
+                    typical_retry_level=baseline_summary.get("typical_retry_level", 0.0),
+                    frequent_struggle_topics=baseline_summary.get("frequent_struggle_topics", []),
+                    best_intervention_type=baseline_summary.get("best_intervention_type"),
+                    prefers_hint_first=work_style.get("prefers_hint_first", False),
+                    prefers_direct_explanation=work_style.get("prefers_direct_explanation", False),
+                    challenge_tolerance=work_style.get("challenge_tolerance", 0.5),
+                    intervention_sensitivity=work_style.get("intervention_sensitivity", 0.5),
                 )
         finally:
             if owns_session:
                 active_db.close()
 
         if memory_profile:
-            return memory_profile
+            return memory_profile.model_copy(
+                update={
+                    "normal_message_length": baseline_summary.get("avg_message_length", 0.0),
+                    "normal_response_delay_seconds": baseline_summary.get("avg_response_time_seconds", 0.0),
+                    "typical_retry_level": baseline_summary.get("typical_retry_level", 0.0),
+                    "frequent_struggle_topics": baseline_summary.get("frequent_struggle_topics", []),
+                    "best_intervention_type": baseline_summary.get("best_intervention_type"),
+                    "prefers_hint_first": work_style.get("prefers_hint_first", False),
+                    "prefers_direct_explanation": work_style.get("prefers_direct_explanation", False),
+                    "challenge_tolerance": work_style.get("challenge_tolerance", 0.5),
+                    "intervention_sensitivity": work_style.get("intervention_sensitivity", 0.5),
+                }
+            )
 
-        return UserProfile(user_id=user_id)
+        return UserProfile(
+            user_id=user_id,
+            normal_message_length=baseline_summary.get("avg_message_length", 0.0),
+            normal_response_delay_seconds=baseline_summary.get("avg_response_time_seconds", 0.0),
+            typical_retry_level=baseline_summary.get("typical_retry_level", 0.0),
+            frequent_struggle_topics=baseline_summary.get("frequent_struggle_topics", []),
+            best_intervention_type=baseline_summary.get("best_intervention_type"),
+            prefers_hint_first=work_style.get("prefers_hint_first", False),
+            prefers_direct_explanation=work_style.get("prefers_direct_explanation", False),
+            challenge_tolerance=work_style.get("challenge_tolerance", 0.5),
+            intervention_sensitivity=work_style.get("intervention_sensitivity", 0.5),
+        )
 
     def update_context(
         self,

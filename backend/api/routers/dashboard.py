@@ -148,4 +148,13 @@ def get_user_profile(
         "recurring_misconceptions": profile.recurring_misconceptions,
         "adaptive_threshold": profile.adaptive_threshold,
         "total_sessions": profile.total_sessions,
+        "normal_message_length": profile.normal_message_length,
+        "normal_response_delay_seconds": profile.normal_response_delay_seconds,
+        "typical_retry_level": profile.typical_retry_level,
+        "frequent_struggle_topics": profile.frequent_struggle_topics,
+        "best_intervention_type": profile.best_intervention_type,
+        "prefers_hint_first": profile.prefers_hint_first,
+        "prefers_direct_explanation": profile.prefers_direct_explanation,
+        "challenge_tolerance": profile.challenge_tolerance,
+        "intervention_sensitivity": profile.intervention_sensitivity,
     }

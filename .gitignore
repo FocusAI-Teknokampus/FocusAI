@@ -23,3 +23,7 @@ data/mem0/
 data/faiss_index/
 
 node_modules/
+
+.tmp_testdata/
+
+pytest-cache-files*

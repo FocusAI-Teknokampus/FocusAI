@@ -25,6 +25,7 @@ from backend.core.schemas import (
     FeatureVector,
     InterventionType,
     MentorIntervention,
+    ResponsePolicyMode,
     ShortTermContext,
     StateEstimate,
     UserProfile,
@@ -35,6 +36,7 @@ from backend.state.feature_extractor import FeatureExtractor
 from backend.state.state_model import StateModel
 from backend.state.uncertainty_engine import UncertaintyEngine
 from backend.agents.mentor_agent import MentorAgent
+from backend.services.response_policy_service import ResponsePolicyService
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -49,6 +51,7 @@ _feature_extractor = FeatureExtractor()
 _state_model = StateModel()
 _uncertainty_engine = UncertaintyEngine()
 _mentor_agent = MentorAgent()
+_response_policy_service = ResponsePolicyService()
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -64,6 +67,7 @@ class MentorGraphState(TypedDict):
 
     feature_vector: Optional[FeatureVector]
     state_estimate: Optional[StateEstimate]
+    response_policy: Optional[ResponsePolicyMode]
 
     should_intervene: bool
     intervention: Optional[MentorIntervention]
@@ -149,6 +153,28 @@ def state_node(state: MentorGraphState) -> dict:
     return {"state_estimate": estimate}
 
 
+def policy_node(state: MentorGraphState) -> dict:
+    """
+    State tahminini cevap politikasina cevirir ve aciklanabilir alanlari doldurur.
+    """
+    estimate = state.get("state_estimate")
+    feature_vector = state.get("feature_vector")
+    if estimate is None or feature_vector is None:
+        return {"response_policy": None}
+
+    policy = _response_policy_service.decide(
+        estimate=estimate,
+        feature_vector=feature_vector,
+        user_profile=state.get("user_profile"),
+        baseline_profile=state.get("baseline_profile"),
+    )
+    enriched_estimate = estimate.model_copy(update=policy)
+    return {
+        "state_estimate": enriched_estimate,
+        "response_policy": policy["response_policy"],
+    }
+
+
 def uncertainty_node(state: MentorGraphState) -> dict:
     """
     Müdahale gerekip gerekmediğine karar verir.
@@ -165,6 +191,7 @@ def uncertainty_node(state: MentorGraphState) -> dict:
             user_id=state["message"].user_id,
             estimate=state["state_estimate"],
         ),
+        response_policy=state.get("response_policy"),
     )
 
     return {
@@ -231,10 +258,16 @@ def clarify_node(state: MentorGraphState) -> dict:
         message=msg,
         triggered_by=estimate.state,
         confidence=estimate.confidence,
-        decision_reason=(
-            f"Confidence ({estimate.confidence}) kullanici esiginin ({estimate.threshold}) altinda kaldigi icin "
-            "dogrudan mudahale yerine aciklayici soru secildi."
+        decision_reason=" | ".join(
+            [
+                *estimate.reasons[:2],
+                (
+                    f"Confidence ({estimate.confidence}) kullanici esiginin ({estimate.threshold}) "
+                    "altinda kaldigi icin aciklayici soru secildi."
+                ),
+            ]
         ),
+        policy_snapshot={"policy_path": estimate.policy_path},
     )
 
     return {
@@ -282,6 +315,7 @@ def response_node(state: MentorGraphState) -> dict:
         rag_context=state.get("rag_context"),
         intervention=state.get("intervention"),
         state_estimate=state.get("state_estimate"),
+        response_policy=state.get("response_policy"),
     )
 
     estimate = state.get("state_estimate")
@@ -293,6 +327,10 @@ def response_node(state: MentorGraphState) -> dict:
         # Frontend bunu "hangi nottan beslendi" bilgisi olarak gosterebilir.
         rag_source=state.get("rag_source"),
         mentor_intervention=state.get("intervention"),
+        response_policy=state.get("response_policy"),
+        response_reasons=estimate.reasons if estimate else [],
+        dominant_signals=estimate.dominant_signals if estimate else [],
+        policy_path=estimate.policy_path if estimate else [],
         current_state=estimate.state if estimate else UserState.UNKNOWN,
     )
 
@@ -312,11 +350,15 @@ def route_after_uncertainty(state: MentorGraphState) -> str:
     """
     intervention = state.get("intervention")
     estimate = state.get("state_estimate")
+    response_policy = state.get("response_policy")
 
     if intervention is None:
         return "rag_node"
 
     # Confidence eşiği kullanıcıya özel threshold ile hizalı olsun.
+    if response_policy == ResponsePolicyMode.CLARIFY:
+        return "clarify_node"
+
     if estimate and estimate.confidence >= estimate.threshold:
         return "mentor_node"
 
@@ -333,6 +375,7 @@ graph = StateGraph(MentorGraphState)
 graph.add_node("session_node", session_node)
 graph.add_node("feature_node", feature_node)
 graph.add_node("state_node", state_node)
+graph.add_node("policy_node", policy_node)
 graph.add_node("uncertainty_node", uncertainty_node)
 graph.add_node("mentor_node", mentor_node)
 graph.add_node("clarify_node", clarify_node)
@@ -343,7 +386,8 @@ graph.set_entry_point("session_node")
 
 graph.add_edge("session_node", "feature_node")
 graph.add_edge("feature_node", "state_node")
-graph.add_edge("state_node", "uncertainty_node")
+graph.add_edge("state_node", "policy_node")
+graph.add_edge("policy_node", "uncertainty_node")
 
 graph.add_conditional_edges(
     "uncertainty_node",

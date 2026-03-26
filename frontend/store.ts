@@ -4,6 +4,13 @@ const API_BASE = 'http://127.0.0.1:8000';
 
 type UserState = 'focused' | 'distracted' | 'fatigued' | 'stuck' | 'unknown';
 
+type ResponsePolicyMode =
+  | 'direct_help'
+  | 'guided_hint'
+  | 'challenge'
+  | 'recovery'
+  | 'clarify';
+
 type InterventionType =
   | 'hint'
   | 'strategy'
@@ -27,6 +34,10 @@ interface ChatApiResponse {
   content: string;
   rag_source?: string | null;
   mentor_intervention?: MentorIntervention | null;
+  response_policy?: ResponsePolicyMode | null;
+  response_reasons?: string[];
+  dominant_signals?: string[];
+  policy_path?: string[];
   current_state: UserState;
   timestamp: string;
 }
@@ -49,12 +60,24 @@ interface DashboardResponse {
   session_id: string;
   user_id: string;
   topic?: string | null;
+  subtopic?: string | null;
+  study_mode?: string | null;
+  camera_used: boolean;
+  started_at?: string | null;
+  ended_at?: string | null;
   message_count: number;
   topics_covered: string[];
   current_state: UserState;
   retry_count: number;
   intervention_count: number;
   focus_score: number | null;
+  focus_timeline: {
+    timestamp: string;
+    score: number;
+    state: UserState | string;
+  }[];
+  behavior_timeline: Record<string, unknown>[];
+  behavior_summary?: Record<string, unknown>;
   summary_text: string | null;
   latest_state_analysis?: {
     state_after?: string | null;
@@ -87,9 +110,16 @@ interface DashboardApiResponse {
   session_id: string;
   user_id: string;
   topic?: string | null;
+  subtopic?: string | null;
+  study_mode?: string | null;
+  camera_used?: boolean;
+  started_at?: string | null;
+  ended_at?: string | null;
   current_state?: string | null;
   intervention_count?: number;
   average_focus_score?: number | null;
+  focus_timeline?: DashboardResponse['focus_timeline'];
+  behavior_timeline?: Record<string, unknown>[];
   source?: string | null;
   retry_count?: number;
   report?: {
@@ -99,6 +129,7 @@ interface DashboardApiResponse {
     intervention_count?: number;
     focus_score?: number | null;
     summary_text?: string | null;
+    behavior_summary?: Record<string, unknown>;
     strengths?: string[];
     weaknesses?: string[];
     recommendations?: string[];
@@ -229,16 +260,66 @@ interface WelcomeResponse {
     created_at?: string | null;
   } | null;
   last_worked_topic?: string | null;
+  last_struggling_concept?: string | null;
   continue_suggestion: string;
+  today_start_recommendation?: string;
   continue_reason: string;
+  mini_recall_question?: string | null;
   baseline: BaselineSummary;
   latest_state_analysis?: DashboardResponse['latest_state_analysis'];
   latest_intervention?: DashboardResponse['latest_intervention'];
+  latest_feedback_impact?: {
+    timestamp?: string | null;
+    intervention_type?: string | null;
+    measurement_status?: string | null;
+    [key: string]: unknown;
+  } | null;
+  operational_next_session_plan?: {
+    topic?: string | null;
+    subtopic?: string | null;
+    duration_minutes?: number | null;
+    start_with?: string | null;
+    first_prompt?: string | null;
+    target_outcome?: string | null;
+    why_now?: string | null;
+    mentor_tactic?: string | null;
+    session_structure?: string[];
+    checkpoints?: string[];
+    risk_watchouts?: string[];
+    state_carryover?: string | null;
+    feedback_carryover?: string | null;
+  } | null;
   personalization_insights?: string[];
   intervention_policy: {
     best_intervention_type?: string | null;
     items: InterventionPolicySummaryItem[];
   };
+}
+
+interface UserProfileResponse {
+  user_id: string;
+  preferred_explanation_style: string;
+  weak_topics: string[];
+  strong_topics: string[];
+  recurring_misconceptions: string[];
+  adaptive_threshold: number;
+  total_sessions: number;
+  normal_message_length: number;
+  normal_response_delay_seconds: number;
+  typical_retry_level: number;
+  frequent_struggle_topics: string[];
+  best_intervention_type?: string | null;
+  prefers_hint_first: boolean;
+  prefers_direct_explanation: boolean;
+  challenge_tolerance: number;
+  intervention_sensitivity: number;
+}
+
+interface LearnerProfileOption {
+  id: string;
+  label: string;
+  createdAt: string;
+  lastUsedAt?: string | null;
 }
 
 interface FeedbackApiResponse {
@@ -254,6 +335,10 @@ export interface ChatMessageUI {
   text: string;
   currentState?: UserState;
   mentorIntervention?: MentorIntervention | null;
+  mentorMode?: ResponsePolicyMode | null;
+  mentorReasons?: string[];
+  dominantSignals?: string[];
+  policyPath?: string[];
   ragSource?: string | null;
   timestamp?: string;
 }
@@ -268,6 +353,8 @@ interface SubmitFeedbackParams {
 
 interface FocusState {
   userId: string;
+  learnerProfiles: LearnerProfileOption[];
+  userProfile: UserProfileResponse | null;
   topic: string;
   sessionId: string | null;
   currentState: UserState;
@@ -288,6 +375,9 @@ interface FocusState {
   error: string | null;
   setUserId: (userId: string) => void;
   setTopic: (topic: string) => void;
+  selectLearnerProfile: (profileId: string) => Promise<void>;
+  createLearnerProfile: (label: string) => Promise<void>;
+  resumeLastProfile: () => Promise<void>;
   clearError: () => void;
   clearFeedbackNotice: () => void;
   addScore: (score: number) => void;
@@ -301,9 +391,135 @@ interface FocusState {
   fetchSessionMessages: (targetSessionId: string) => Promise<void>;
   fetchFocusTrend: (targetUserId?: string, days?: number) => Promise<void>;
   fetchWelcome: (targetUserId?: string) => Promise<void>;
+  fetchUserProfile: (targetUserId?: string) => Promise<void>;
   hydrateUserWorkspace: (targetUserId?: string) => Promise<void>;
   selectHistorySession: (sessionId: string) => Promise<void>;
   submitFeedback: (params: SubmitFeedbackParams) => Promise<void>;
+}
+
+const PROFILE_STORAGE_KEY = 'focusai.learner_profiles';
+const LAST_PROFILE_STORAGE_KEY = 'focusai.last_profile_id';
+const DEFAULT_USER_ID = 'user_001';
+
+function defaultAiMessage(): ChatMessageUI {
+  return {
+    role: 'ai',
+    text: 'Selam! Bugun hangi konuyu calisiyoruz? Sana ders notlarindan yardimci olabilirim.',
+  };
+}
+
+function normalizeProfileId(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/ı/g, 'i')
+    .replace(/ğ/g, 'g')
+    .replace(/ü/g, 'u')
+    .replace(/ş/g, 's')
+    .replace(/ö/g, 'o')
+    .replace(/ç/g, 'c')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function sortProfiles(profiles: LearnerProfileOption[]) {
+  return [...profiles].sort((a, b) => {
+    const lastA = a.lastUsedAt ? new Date(a.lastUsedAt).getTime() : 0;
+    const lastB = b.lastUsedAt ? new Date(b.lastUsedAt).getTime() : 0;
+    if (lastA !== lastB) return lastB - lastA;
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  });
+}
+
+function readStoredProfiles(): LearnerProfileOption[] {
+  if (typeof window === 'undefined') {
+    return [];
+  }
+
+  try {
+    const raw = window.localStorage.getItem(PROFILE_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .filter(
+        (item): item is LearnerProfileOption =>
+          typeof item?.id === 'string' &&
+          typeof item?.label === 'string' &&
+          typeof item?.createdAt === 'string'
+      )
+      .map((item) => ({
+        id: normalizeProfileId(item.id),
+        label: item.label.trim() || item.id,
+        createdAt: item.createdAt,
+        lastUsedAt: item.lastUsedAt ?? null,
+      }))
+      .filter((item) => item.id);
+  } catch {
+    return [];
+  }
+}
+
+function persistProfiles(profiles: LearnerProfileOption[]) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  window.localStorage.setItem(
+    PROFILE_STORAGE_KEY,
+    JSON.stringify(sortProfiles(profiles))
+  );
+}
+
+function readLastProfileId() {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  const value = window.localStorage.getItem(LAST_PROFILE_STORAGE_KEY);
+  return value ? normalizeProfileId(value) : null;
+}
+
+function upsertProfile(
+  profiles: LearnerProfileOption[],
+  profileId: string,
+  label?: string,
+  markAsUsed = false
+) {
+  const normalizedId = normalizeProfileId(profileId);
+  if (!normalizedId) return sortProfiles(profiles);
+
+  const now = new Date().toISOString();
+  const existing = profiles.find((item) => item.id === normalizedId);
+  const next = existing
+    ? profiles.map((item) =>
+        item.id === normalizedId
+          ? {
+              ...item,
+              label: label?.trim() || item.label,
+              lastUsedAt: markAsUsed ? now : item.lastUsedAt ?? null,
+            }
+          : item
+      )
+    : [
+        ...profiles,
+        {
+          id: normalizedId,
+          label: label?.trim() || normalizedId,
+          createdAt: now,
+          lastUsedAt: markAsUsed ? now : null,
+        },
+      ];
+
+  const sorted = sortProfiles(next);
+  persistProfiles(sorted);
+
+  if (markAsUsed && typeof window !== 'undefined') {
+    window.localStorage.setItem(LAST_PROFILE_STORAGE_KEY, normalizedId);
+  }
+
+  return sorted;
 }
 
 async function parseError(res: Response): Promise<string> {
@@ -346,6 +562,11 @@ function mapDashboardResponse(data: DashboardApiResponse): DashboardResponse {
     session_id: data.session_id,
     user_id: data.user_id,
     topic: data.topic ?? null,
+    subtopic: data.subtopic ?? null,
+    study_mode: data.study_mode ?? null,
+    camera_used: data.camera_used ?? false,
+    started_at: data.started_at ?? null,
+    ended_at: data.ended_at ?? null,
     message_count: data.report?.message_count ?? 0,
     topics_covered: data.report?.topics_covered ?? [],
     current_state: toUiState(data.current_state),
@@ -353,6 +574,9 @@ function mapDashboardResponse(data: DashboardApiResponse): DashboardResponse {
     intervention_count:
       data.report?.intervention_count ?? data.intervention_count ?? 0,
     focus_score: data.report?.focus_score ?? data.average_focus_score ?? null,
+    focus_timeline: data.focus_timeline ?? [],
+    behavior_timeline: data.behavior_timeline ?? [],
+    behavior_summary: data.report?.behavior_summary ?? {},
     summary_text: data.report?.summary_text ?? null,
     latest_state_analysis: data.latest_state_analysis ?? null,
     latest_intervention: data.latest_intervention ?? null,
@@ -364,17 +588,24 @@ function mapDashboardResponse(data: DashboardApiResponse): DashboardResponse {
   };
 }
 
+const storedProfiles = readStoredProfiles();
+const lastProfileId = readLastProfileId();
+const initialProfileId = lastProfileId || storedProfiles[0]?.id || DEFAULT_USER_ID;
+const initialLearnerProfiles = upsertProfile(
+  storedProfiles,
+  initialProfileId,
+  initialProfileId === DEFAULT_USER_ID ? 'Demo profil' : initialProfileId,
+  Boolean(lastProfileId)
+);
+
 export const useFocusStore = create<FocusState>((set, get) => ({
-  userId: 'user_001',
+  userId: initialProfileId,
+  learnerProfiles: initialLearnerProfiles,
+  userProfile: null,
   topic: '',
   sessionId: null,
   currentState: 'unknown',
-  messages: [
-    {
-      role: 'ai',
-      text: 'Selam! Bugun hangi konuyu calisiyoruz? Sana ders notlarindan yardimci olabilirim.',
-    },
-  ],
+  messages: [defaultAiMessage()],
   scores: [],
   stats: { totalTime: '0 dk', avgSuccess: '%0' },
   sessionSummary: null,
@@ -392,6 +623,73 @@ export const useFocusStore = create<FocusState>((set, get) => ({
 
   setUserId: (userId) => set({ userId }),
   setTopic: (topic) => set({ topic }),
+  selectLearnerProfile: async (profileId) => {
+    const normalizedId = normalizeProfileId(profileId);
+    if (!normalizedId) {
+      set({ error: 'Gecerli bir profil sec.' });
+      return;
+    }
+
+    const existing = get().learnerProfiles.find((item) => item.id === normalizedId);
+    const nextProfiles = upsertProfile(
+      get().learnerProfiles,
+      normalizedId,
+      existing?.label || profileId,
+      true
+    );
+
+    set({
+      userId: normalizedId,
+      learnerProfiles: nextProfiles,
+      userProfile: null,
+      topic: '',
+      sessionId: null,
+      currentState: 'unknown',
+      messages: [defaultAiMessage()],
+      scores: [],
+      stats: { totalTime: '0 dk', avgSuccess: '%0' },
+      sessionSummary: null,
+      dashboard: null,
+      uploadedDocuments: [],
+      sessionHistory: [],
+      selectedHistorySessionId: null,
+      selectedHistoryMessages: [],
+      focusTrend: null,
+      welcomeData: null,
+      feedbackNotice: null,
+      error: null,
+    });
+
+    await get().hydrateUserWorkspace(normalizedId);
+  },
+  createLearnerProfile: async (label) => {
+    const trimmedLabel = label.trim();
+    const normalizedId = normalizeProfileId(trimmedLabel);
+
+    if (!trimmedLabel || !normalizedId) {
+      set({ error: 'Yeni profil icin bir isim gir.' });
+      return;
+    }
+
+    const nextProfiles = upsertProfile(
+      get().learnerProfiles,
+      normalizedId,
+      trimmedLabel,
+      true
+    );
+
+    set({
+      learnerProfiles: nextProfiles,
+      error: null,
+    });
+
+    await get().selectLearnerProfile(normalizedId);
+  },
+  resumeLastProfile: async () => {
+    const targetProfileId = readLastProfileId();
+    if (!targetProfileId) return;
+    await get().selectLearnerProfile(targetProfileId);
+  },
   clearError: () => set({ error: null }),
   clearFeedbackNotice: () => set({ feedbackNotice: null }),
 
@@ -419,8 +717,8 @@ export const useFocusStore = create<FocusState>((set, get) => ({
     }),
 
   startSession: async (cameraEnabled = false) => {
-    const { userId, topic, welcomeData } = get();
-    const trimmedUserId = userId.trim();
+    const { userId, topic, welcomeData, learnerProfiles } = get();
+    const trimmedUserId = normalizeProfileId(userId);
 
     if (!trimmedUserId) {
       set({ error: 'Kullanici ID gerekli.' });
@@ -453,10 +751,17 @@ export const useFocusStore = create<FocusState>((set, get) => ({
       }
 
       const data: SessionStartResponse = await res.json();
+      const nextProfiles = upsertProfile(
+        learnerProfiles,
+        data.user_id,
+        learnerProfiles.find((item) => item.id === data.user_id)?.label || data.user_id,
+        true
+      );
 
       set({
         sessionId: data.session_id,
         userId: data.user_id,
+        learnerProfiles: nextProfiles,
         topic: data.topic ?? '',
         currentState: 'unknown',
         messages: [
@@ -473,6 +778,7 @@ export const useFocusStore = create<FocusState>((set, get) => ({
         get().fetchUploadedDocuments(data.user_id),
         get().fetchSessionHistory(data.user_id),
         get().fetchWelcome(data.user_id),
+        get().fetchUserProfile(data.user_id),
       ]);
     } catch (err) {
       set({
@@ -560,6 +866,10 @@ export const useFocusStore = create<FocusState>((set, get) => ({
         text: data.content,
         currentState: nextState,
         mentorIntervention: data.mentor_intervention ?? null,
+        mentorMode: data.response_policy ?? null,
+        mentorReasons: data.response_reasons ?? [],
+        dominantSignals: data.dominant_signals ?? [],
+        policyPath: data.policy_path ?? [],
         ragSource: data.rag_source ?? null,
         timestamp: data.timestamp,
       };
@@ -701,7 +1011,7 @@ export const useFocusStore = create<FocusState>((set, get) => ({
 
   fetchUploadedDocuments: async (targetUserId) => {
     const { userId } = get();
-    const activeUserId = (targetUserId ?? userId).trim();
+    const activeUserId = normalizeProfileId(targetUserId ?? userId);
 
     if (!activeUserId) {
       set({ uploadedDocuments: [] });
@@ -723,7 +1033,7 @@ export const useFocusStore = create<FocusState>((set, get) => ({
 
   fetchSessionHistory: async (targetUserId) => {
     const { userId, selectedHistorySessionId } = get();
-    const activeUserId = (targetUserId ?? userId).trim();
+    const activeUserId = normalizeProfileId(targetUserId ?? userId);
 
     if (!activeUserId) {
       set({
@@ -786,7 +1096,7 @@ export const useFocusStore = create<FocusState>((set, get) => ({
 
   fetchFocusTrend: async (targetUserId, days = 7) => {
     const { userId } = get();
-    const activeUserId = (targetUserId ?? userId).trim();
+    const activeUserId = normalizeProfileId(targetUserId ?? userId);
 
     if (!activeUserId) {
       set({ focusTrend: null });
@@ -808,7 +1118,7 @@ export const useFocusStore = create<FocusState>((set, get) => ({
 
   fetchWelcome: async (targetUserId) => {
     const { userId } = get();
-    const activeUserId = (targetUserId ?? userId).trim();
+    const activeUserId = normalizeProfileId(targetUserId ?? userId);
 
     if (!activeUserId) {
       set({ welcomeData: null });
@@ -826,12 +1136,35 @@ export const useFocusStore = create<FocusState>((set, get) => ({
     }
   },
 
+  fetchUserProfile: async (targetUserId) => {
+    const { userId } = get();
+    const activeUserId = normalizeProfileId(targetUserId ?? userId);
+
+    if (!activeUserId) {
+      set({ userProfile: null });
+      return;
+    }
+
+    try {
+      const res = await fetch(
+        `${API_BASE}/dashboard/profile/${encodeURIComponent(activeUserId)}`
+      );
+      if (!res.ok) return;
+
+      const data: UserProfileResponse = await res.json();
+      set({ userProfile: data });
+    } catch {
+      // yardimci veri
+    }
+  },
+
   hydrateUserWorkspace: async (targetUserId) => {
     const { userId } = get();
-    const activeUserId = (targetUserId ?? userId).trim();
+    const activeUserId = normalizeProfileId(targetUserId ?? userId);
 
     if (!activeUserId) {
       set({
+        userProfile: null,
         uploadedDocuments: [],
         sessionHistory: [],
         selectedHistorySessionId: null,
@@ -847,6 +1180,7 @@ export const useFocusStore = create<FocusState>((set, get) => ({
       get().fetchSessionHistory(activeUserId),
       get().fetchFocusTrend(activeUserId),
       get().fetchWelcome(activeUserId),
+      get().fetchUserProfile(activeUserId),
     ]);
   },
 
@@ -862,7 +1196,7 @@ export const useFocusStore = create<FocusState>((set, get) => ({
     notes,
   }) => {
     const { userId } = get();
-    const activeUserId = userId.trim();
+    const activeUserId = normalizeProfileId(userId);
 
     if (!activeUserId) {
       set({ error: 'Feedback gondermek icin kullanici ID gerekli.' });

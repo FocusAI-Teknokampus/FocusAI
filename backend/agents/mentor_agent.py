@@ -24,6 +24,7 @@ from backend.core.schemas import (
     ChatMessage,
     InterventionType,
     MentorIntervention,
+    ResponsePolicyMode,
     ShortTermContext,
     StateEstimate,
     UserProfile,
@@ -127,6 +128,7 @@ class MentorAgent:
         rag_context: Optional[str] = None,
         intervention: Optional[MentorIntervention] = None,
         state_estimate: Optional[StateEstimate] = None,
+        response_policy: Optional[ResponsePolicyMode] = None,
     ) -> str:
         """
         Kullanıcının mesajına cevap üretir.
@@ -138,11 +140,12 @@ class MentorAgent:
             session_context=session_context,
             rag_context=rag_context,
             state_estimate=state_estimate,
+            response_policy=response_policy,
         )
 
         client = self._get_client()
         if client is None:
-            return self._fallback_response(message, rag_context, intervention, state_estimate)
+            return self._fallback_response(message, rag_context, intervention, state_estimate, response_policy)
 
         try:
             response = client.chat.completions.create(
@@ -161,6 +164,7 @@ class MentorAgent:
                 rag_context,
                 intervention,
                 state_estimate,
+                response_policy,
             )
             return f"{fallback} (LLM fallback: {str(e)})"
 
@@ -223,6 +227,19 @@ class MentorAgent:
                 "onu tanıyorsun."
             )
 
+        if profile.prefers_hint_first:
+            persona_lines.append("Kullanici ipucu ile ilerlemeye yatkin; cevabi dogrudan verme.")
+        if profile.prefers_direct_explanation:
+            persona_lines.append("Kullanici belirsiz dolasma yerine daha dogrudan aciklama bekler.")
+        if profile.frequent_struggle_topics:
+            persona_lines.append(
+                f"Sik zorlandigi konular: {', '.join(profile.frequent_struggle_topics[:3])}."
+            )
+        if profile.best_intervention_type:
+            persona_lines.append(
+                f"Tarihsel olarak en iyi calisan mudahale tipi: {profile.best_intervention_type}."
+            )
+
         if mode == "intervention":
             persona_lines.append(
                 "\nŞu an bir müdahale mesajı yazıyorsun. "
@@ -277,6 +294,7 @@ class MentorAgent:
         session_context: Optional[ShortTermContext],
         rag_context: Optional[str],
         state_estimate: Optional[StateEstimate],
+        response_policy: Optional[ResponsePolicyMode],
     ) -> list[dict]:
         """
         LLM'e gönderilecek mesaj geçmişini hazırlar.
@@ -316,6 +334,25 @@ class MentorAgent:
                 messages.append({"role": "system", "content": state_hint})
 
         # Son kullanıcı mesajı
+        if response_policy:
+            policy_hint = {
+                ResponsePolicyMode.DIRECT_HELP: "Cevabi net ve dogrudan ver; gereksiz dolanma.",
+                ResponsePolicyMode.GUIDED_HINT: "Dogrudan cevabi verme; yonlendirici ipucu ve sonraki adimi sun.",
+                ResponsePolicyMode.CHALLENGE: "Kullaniciyi dusunmeye zorlayan kisa bir challenge veya geri-soru ekle.",
+                ResponsePolicyMode.RECOVERY: "Once toparlama, tempo dusurme ve kucuk sonraki adim uzerine kur.",
+                ResponsePolicyMode.CLARIFY: "Ana cevap yerine netlestirici bir soru sor.",
+            }.get(response_policy)
+            if policy_hint:
+                messages.append({"role": "system", "content": policy_hint})
+
+        if state_estimate and state_estimate.reasons:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": f"State nedenleri: {' | '.join(state_estimate.reasons[:2])}",
+                }
+            )
+
         messages.append({"role": "user", "content": current_message})
 
         return messages
@@ -326,6 +363,7 @@ class MentorAgent:
         rag_context: Optional[str],
         intervention: Optional[MentorIntervention],
         state_estimate: Optional[StateEstimate],
+        response_policy: Optional[ResponsePolicyMode],
     ) -> str:
         """
         LLM hazir degilse minimum faydali cevap dondur.
@@ -336,6 +374,18 @@ class MentorAgent:
         if rag_context:
             snippet = rag_context.strip().splitlines()[0][:180]
             return f"Senin notuna gore ilgili kisim su: {snippet}"
+
+        if response_policy == ResponsePolicyMode.CLARIFY:
+            return "Sorunu biraz daha netlestirir misin? Hangi adimda koptugunu yazarsan oradan devam edelim."
+
+        if response_policy == ResponsePolicyMode.GUIDED_HINT:
+            return "Kucuk bir ipucuyla ilerleyelim: once bildigin son dogru adimi yaz, sonra bir sonraki gecisi birlikte kontrol edelim."
+
+        if response_policy == ResponsePolicyMode.CHALLENGE:
+            return "Direkt cevaptan once su mini challenge'i dene: problemi tek cumlede yeniden kur ve ilk adimi kendin sec."
+
+        if response_policy == ResponsePolicyMode.RECOVERY:
+            return "Once ritmi toparlayalim. Tek bir alt hedef sec, onu 1 cumlede yaz; sonra en kucuk adimdan devam edelim."
 
         if state_estimate and state_estimate.state != UserState.FOCUSED:
             return (

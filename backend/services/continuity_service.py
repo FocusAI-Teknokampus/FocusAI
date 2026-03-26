@@ -32,8 +32,11 @@ class ContinuityService:
                 "last_session": None,
                 "last_report": None,
                 "last_worked_topic": None,
+                "last_struggling_concept": None,
                 "continue_suggestion": "Ilk oturumunu baslat ve kisa bir hedef belirle.",
+                "today_start_recommendation": "Ilk oturumunu baslat ve kisa bir hedef belirle.",
                 "continue_reason": "Henuz onceki oturum verisi yok.",
+                "mini_recall_question": None,
                 "baseline": baseline,
                 "intervention_policy": policy,
                 "latest_feedback_impact": None,
@@ -87,6 +90,16 @@ class ContinuityService:
             latest_feedback_impact=latest_feedback_impact,
             next_session_plan=next_session_plan,
         )
+        last_struggling_concept = self._extract_last_struggling_concept(
+            session=session,
+            report=report,
+            latest_state_analysis=latest_state_analysis,
+        )
+        mini_recall_question = self._build_mini_recall_question(
+            topic=session.topic,
+            last_struggling_concept=last_struggling_concept,
+            next_session_plan=next_session_plan,
+        )
 
         return {
             "user_id": user_id,
@@ -104,8 +117,11 @@ class ContinuityService:
             },
             "last_report": last_report,
             "last_worked_topic": session.topic,
+            "last_struggling_concept": last_struggling_concept,
             "continue_suggestion": continue_suggestion,
+            "today_start_recommendation": continue_suggestion,
             "continue_reason": continue_reason,
+            "mini_recall_question": mini_recall_question,
             "baseline": baseline,
             "intervention_policy": policy,
             "latest_state_analysis": latest_state_analysis,
@@ -119,6 +135,32 @@ class ContinuityService:
                 latest_feedback_impact=latest_feedback_impact,
             ),
         }
+
+    def _extract_last_struggling_concept(self, session, report, latest_state_analysis: dict[str, Any] | None) -> str | None:
+        if report is not None:
+            weaknesses = self.history_service.parse_report_list(report.weaknesses)
+            if weaknesses:
+                return weaknesses[0]
+
+        reasons = (latest_state_analysis or {}).get("reasons") or []
+        if reasons:
+            return reasons[0]
+
+        return session.subtopic or session.topic
+
+    def _build_mini_recall_question(
+        self,
+        topic: str | None,
+        last_struggling_concept: str | None,
+        next_session_plan: dict[str, Any],
+    ) -> str | None:
+        if next_session_plan.get("first_prompt"):
+            return next_session_plan["first_prompt"]
+        if last_struggling_concept:
+            return f"Dun zorlandigin nokta neydi ve bugun bunu hangi ilk adimla test edeceksin: {last_struggling_concept}"
+        if topic:
+            return f"{topic} konusunda bugun baslamadan once en kritik kavrami tek cumleyle hatirla."
+        return None
 
     def _build_personalization_insights(
         self,

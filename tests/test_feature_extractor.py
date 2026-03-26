@@ -26,6 +26,8 @@ class FeatureExtractorTests(unittest.TestCase):
         self.assertGreaterEqual(second.semantic_retry_score, 0.9)
         self.assertGreaterEqual(second.retry_count, 1)
         self.assertEqual(second.topic, "programlama")
+        self.assertGreaterEqual(second.help_seeking_score, 0.1)
+        self.assertLessEqual(second.answer_commitment_score, 0.2)
 
     def test_confused_follow_up_exposes_confusion_and_topic_stability(self) -> None:
         base_time = datetime(2026, 3, 26, 10, 0, 0)
@@ -45,6 +47,16 @@ class FeatureExtractorTests(unittest.TestCase):
         self.assertGreaterEqual(follow_up.confusion_score, 0.5)
         self.assertGreaterEqual(follow_up.topic_stability, 0.9)
         self.assertGreater(follow_up.question_density, 0.1)
+
+    def test_attempt_message_raises_answer_commitment(self) -> None:
+        feature = self.extractor.extract(
+            session_id="s3",
+            message_content="Integralde once parcali integrasyon denedim, x^2 * e^x tarafinda takildim.",
+            message_timestamp=datetime(2026, 3, 26, 11, 0, 0),
+        )
+
+        self.assertGreaterEqual(feature.answer_commitment_score, 0.3)
+        self.assertGreaterEqual(feature.help_seeking_score, 0.0)
 
 
 if __name__ == "__main__":

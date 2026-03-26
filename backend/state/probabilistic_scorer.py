@@ -22,16 +22,22 @@ class ProbabilisticScorer:
         idle_spike = deviation_features["idle_time_seconds"]["severity"]
         slow_response = deviation_features["response_time_seconds"]["severity"]
         short_message = deviation_features["message_length"]["severity"]
+        help_spike = deviation_features.get("help_seeking_score", {}).get("severity", 0.0)
+        low_commitment = deviation_features.get("answer_commitment_score", {}).get("severity", 0.0)
         confusion_score = getattr(features, "confusion_score", 0.0) or 0.0
         semantic_retry = getattr(features, "semantic_retry_score", 0.0) or 0.0
         topic_stability = getattr(features, "topic_stability", 1.0) or 0.0
         question_density = getattr(features, "question_density", 0.0) or 0.0
+        help_seeking = getattr(features, "help_seeking_score", 0.0) or 0.0
+        answer_commitment = getattr(features, "answer_commitment_score", 0.0) or 0.0
 
         raw_scores[UserState.STUCK] += retry_spike * 1.4
         raw_scores[UserState.STUCK] += idle_spike * 0.9
         raw_scores[UserState.STUCK] += slow_response * 0.8
         raw_scores[UserState.STUCK] += semantic_retry * 1.1
         raw_scores[UserState.STUCK] += confusion_score * 0.9
+        raw_scores[UserState.STUCK] += help_seeking * 0.35
+        raw_scores[UserState.STUCK] += low_commitment * 0.55
 
         raw_scores[UserState.FATIGUED] += idle_spike * 1.0
         raw_scores[UserState.FATIGUED] += slow_response * 0.7
@@ -40,6 +46,7 @@ class ProbabilisticScorer:
         raw_scores[UserState.DISTRACTED] += max(0.0, idle_spike - 0.2) * 0.5
         raw_scores[UserState.DISTRACTED] += max(0.0, 0.65 - topic_stability) * 1.2
         raw_scores[UserState.DISTRACTED] += question_density * 0.35 if features.message_length < 40 else 0.0
+        raw_scores[UserState.DISTRACTED] += help_spike * 0.25
         if features.gaze_on_screen is False:
             raw_scores[UserState.DISTRACTED] += 0.3
         if features.hand_on_chin is True:
@@ -52,11 +59,15 @@ class ProbabilisticScorer:
             slow_response,
             semantic_retry * 0.8,
             confusion_score * 0.7,
+            help_spike * 0.5,
+            low_commitment * 0.6,
         )
         if focus_penalty < 0.2 and features.retry_count == 0:
             raw_scores[UserState.FOCUSED] += 1.0
         raw_scores[UserState.FOCUSED] += max(0.0, 0.8 - focus_penalty)
         raw_scores[UserState.FOCUSED] += max(0.0, topic_stability - 0.55) * 0.4
+        raw_scores[UserState.FOCUSED] += answer_commitment * 0.85
+        raw_scores[UserState.FOCUSED] -= max(0.0, help_seeking - 0.55) * 0.2
         if features.gaze_on_screen is False:
             raw_scores[UserState.FOCUSED] -= 0.15
 
@@ -75,12 +86,25 @@ class ProbabilisticScorer:
         question_density = getattr(features, "question_density", 0.0) or 0.0
         confusion_score = getattr(features, "confusion_score", 0.0) or 0.0
         semantic_retry = getattr(features, "semantic_retry_score", 0.0) or 0.0
+        help_seeking = getattr(features, "help_seeking_score", 0.0) or 0.0
+        answer_commitment = getattr(features, "answer_commitment_score", 0.0) or 0.0
 
-        if (retry_spike >= 0.6 or semantic_retry >= 0.65) and short_message >= 0.5 and slow_response < 0.3:
+        if (
+            (retry_spike >= 0.6 or semantic_retry >= 0.65)
+            and short_message >= 0.5
+            and slow_response < 0.3
+            and answer_commitment < 0.4
+        ):
             return LearningPattern.SHALLOW_LEARNING
-        if idle_spike >= 0.5 and (features.retry_count >= 1 or slow_response >= 0.4 or confusion_score >= 0.35):
+        if (
+            (idle_spike >= 0.5 or answer_commitment >= 0.55)
+            and (features.retry_count >= 1 or slow_response >= 0.4 or confusion_score >= 0.35)
+        ):
             return LearningPattern.DEEP_ATTEMPT
-        if (retry_spike >= 0.8 or semantic_retry >= 0.8) and (short_message >= 0.6 or question_density >= 0.35):
+        if (
+            (retry_spike >= 0.8 or semantic_retry >= 0.8)
+            and (short_message >= 0.6 or question_density >= 0.35 or help_seeking >= 0.6)
+        ):
             return LearningPattern.MISCONCEPTION
         return LearningPattern.NORMAL
 

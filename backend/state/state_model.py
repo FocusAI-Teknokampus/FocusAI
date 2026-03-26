@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from backend.core.config import settings
 from backend.core.schemas import StateEstimate
+from backend.services.response_policy_service import ResponsePolicyService
 from backend.state.decision_controller import DecisionController
 from backend.state.feature_deviation_scorer import FeatureDeviationScorer
 from backend.state.probabilistic_scorer import ProbabilisticScorer
@@ -18,6 +19,7 @@ class StateModel:
         self.rule_extractor = RuleSignalExtractor()
         self.probabilistic_scorer = ProbabilisticScorer()
         self.decision_controller = DecisionController()
+        self.response_policy_service = ResponsePolicyService()
 
     def predict(
         self,
@@ -42,7 +44,7 @@ class StateModel:
 
         predicted_state = decision["predicted_state"]
 
-        return StateEstimate(
+        estimate = StateEstimate(
             session_id=features.session_id,
             state=predicted_state,
             predicted_state=predicted_state,
@@ -61,3 +63,9 @@ class StateModel:
                 for key, value in state_probabilities.items()
             },
         )
+        policy = self.response_policy_service.decide(
+            estimate=estimate,
+            feature_vector=features,
+            baseline_profile=baseline_profile,
+        )
+        return estimate.model_copy(update=policy)

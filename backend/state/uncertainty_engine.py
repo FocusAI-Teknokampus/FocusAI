@@ -8,6 +8,7 @@ from backend.core.schemas import (
     InterventionType,
     LearningPattern,
     MentorIntervention,
+    ResponsePolicyMode,
     StateEstimate,
     UserProfile,
     UserState,
@@ -29,7 +30,9 @@ class UncertaintyEngine:
         profile: Optional[UserProfile] = None,
         session_id: str = "",
         policy_summary: Optional[dict[str, dict]] = None,
+        response_policy: Optional[ResponsePolicyMode] = None,
     ) -> Optional[MentorIntervention]:
+        response_policy = response_policy or estimate.response_policy
         threshold = settings.default_uncertainty_threshold
         if profile and profile.adaptive_threshold:
             threshold = profile.adaptive_threshold
@@ -37,7 +40,7 @@ class UncertaintyEngine:
         if not self._should_intervene(estimate, threshold, session_id):
             return None
 
-        candidates = self._candidate_interventions(estimate)
+        candidates = self._candidate_interventions(estimate, response_policy)
         intervention_type, policy_snapshot, decision_reason = self._select_intervention_type(
             estimate=estimate,
             candidates=candidates,
@@ -89,12 +92,41 @@ class UncertaintyEngine:
 
         return True
 
-    def _candidate_interventions(self, estimate: StateEstimate) -> list[InterventionType]:
+    def _candidate_interventions(
+        self,
+        estimate: StateEstimate,
+        response_policy: Optional[ResponsePolicyMode] = None,
+    ) -> list[InterventionType]:
         state = estimate.state
         pattern = estimate.learning_pattern
 
+        if response_policy == ResponsePolicyMode.CLARIFY:
+            return [InterventionType.QUESTION]
+
+        if response_policy == ResponsePolicyMode.DIRECT_HELP and state != UserState.FATIGUED:
+            return [InterventionType.NONE]
+
         if estimate.confidence < estimate.threshold:
             return [InterventionType.QUESTION]
+
+        if response_policy == ResponsePolicyMode.RECOVERY:
+            if state in [UserState.FATIGUED, UserState.DISTRACTED]:
+                return [InterventionType.BREAK, InterventionType.QUESTION, InterventionType.MODE_SWITCH]
+            if state == UserState.STUCK:
+                return [InterventionType.STRATEGY, InterventionType.BREAK, InterventionType.QUESTION]
+
+        if response_policy == ResponsePolicyMode.GUIDED_HINT:
+            if state == UserState.STUCK:
+                if pattern == LearningPattern.SHALLOW_LEARNING:
+                    return [InterventionType.STRATEGY, InterventionType.HINT, InterventionType.QUESTION]
+                return [InterventionType.HINT, InterventionType.STRATEGY, InterventionType.QUESTION]
+            if state == UserState.DISTRACTED:
+                return [InterventionType.QUESTION, InterventionType.MODE_SWITCH, InterventionType.BREAK]
+
+        if response_policy == ResponsePolicyMode.CHALLENGE:
+            if state in [UserState.STUCK, UserState.DISTRACTED]:
+                return [InterventionType.QUESTION, InterventionType.MODE_SWITCH, InterventionType.STRATEGY]
+            return [InterventionType.NONE]
 
         if state == UserState.FATIGUED:
             return [InterventionType.BREAK, InterventionType.QUESTION, InterventionType.MODE_SWITCH]

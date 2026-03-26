@@ -184,6 +184,8 @@ class ApiIntegrationTests(unittest.TestCase):
             welcome_payload["intervention_policy"]["best_intervention_type"],
             intervention_type,
         )
+        self.assertIn("today_start_recommendation", welcome_payload)
+        self.assertIn("mini_recall_question", welcome_payload)
         self.assertIsNotNone(welcome_payload["latest_feedback_impact"])
         self.assertIsNotNone(welcome_payload["operational_next_session_plan"])
         self.assertIn("first_prompt", welcome_payload["operational_next_session_plan"])
@@ -205,6 +207,8 @@ class ApiIntegrationTests(unittest.TestCase):
             dashboard_payload["latest_intervention"]["intervention_type"],
             intervention_type,
         )
+        self.assertIn("response_policy", dashboard_payload["latest_state_analysis"])
+        self.assertIn("reasons", dashboard_payload["latest_state_analysis"])
         self.assertIsNotNone(dashboard_payload["latest_intervention"]["feedback_impact"])
         self.assertIn("mentor_tactic", dashboard_payload["report"]["next_session_plan"])
         self.assertIn("session_structure", dashboard_payload["report"]["next_session_plan"])

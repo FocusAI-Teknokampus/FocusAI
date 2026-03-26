@@ -56,6 +56,17 @@ class InterventionType(str, Enum):
     NONE             = "none"             # Müdahale gerekmez
 
 
+class ResponsePolicyMode(str, Enum):
+    """
+    State tahmininden sonra cevap stilini secen ara policy katmani.
+    """
+    DIRECT_HELP = "direct_help"
+    GUIDED_HINT = "guided_hint"
+    CHALLENGE = "challenge"
+    RECOVERY = "recovery"
+    CLARIFY = "clarify"
+
+
 class InputChannel(str, Enum):
     """
     Hangi kanaldan veri geldiği.
@@ -131,6 +142,10 @@ class ChatResponse(BaseModel):
     content: str                          # Ana LLM yanıtı
     rag_source: Optional[str] = None      # Hangi nottan alındı?
     mentor_intervention: Optional["MentorIntervention"] = None
+    response_policy: Optional[ResponsePolicyMode] = None
+    response_reasons: list[str] = Field(default_factory=list)
+    dominant_signals: list[str] = Field(default_factory=list)
+    policy_path: list[str] = Field(default_factory=list)
     current_state: UserState = UserState.UNKNOWN
     timestamp: datetime = Field(default_factory=datetime.now)
 
@@ -168,6 +183,8 @@ class BehaviorSignal(BaseModel):
     confusion_score: float = 0.0          # Yardım/karışıklık sinyali
     topic_stability: float = 1.0          # Son mesajlarla konu sürekliliği
     semantic_retry_score: float = 0.0     # Önceki mesajlara anlamsal tekrar benzerliği
+    help_seeking_score: float = 0.0       # Dogrudan yardim/cevap talebi yogunlugu
+    answer_commitment_score: float = 0.0  # Kendi deneme ve dusunme eforu sinyali
 
 
 class FeatureVector(BaseModel):
@@ -189,6 +206,8 @@ class FeatureVector(BaseModel):
     confusion_score: float = 0.0
     topic_stability: float = 1.0
     semantic_retry_score: float = 0.0
+    help_seeking_score: float = 0.0
+    answer_commitment_score: float = 0.0
 
     # Kamera sinyalleri (opsiyonel)
     ear_score: Optional[float] = None
@@ -216,6 +235,10 @@ class StateEstimate(BaseModel):
     uncertainty_signal: float = 1.0
     learning_pattern: LearningPattern = LearningPattern.NORMAL
     threshold: float = 0.75              # Adaptive threshold — başta sabit
+    response_policy: ResponsePolicyMode = ResponsePolicyMode.DIRECT_HELP
+    dominant_signals: list[str] = Field(default_factory=list)
+    reasons: list[str] = Field(default_factory=list)
+    policy_path: list[str] = Field(default_factory=list)
     deviation_features: dict = Field(default_factory=dict)
     state_scores: dict = Field(default_factory=dict)
     state_probabilities: dict = Field(default_factory=dict)
@@ -286,6 +309,15 @@ class UserProfile(BaseModel):
     adaptive_threshold: float = 0.75     # Kişiye özel UE eşiği
     total_sessions: int = 0
     last_session_at: Optional[datetime] = None
+    normal_message_length: float = 0.0
+    normal_response_delay_seconds: float = 0.0
+    typical_retry_level: float = 0.0
+    frequent_struggle_topics: list[str] = Field(default_factory=list)
+    best_intervention_type: Optional[str] = None
+    prefers_hint_first: bool = False
+    prefers_direct_explanation: bool = False
+    challenge_tolerance: float = 0.5
+    intervention_sensitivity: float = 0.5
 
 
 class ShortTermContext(BaseModel):

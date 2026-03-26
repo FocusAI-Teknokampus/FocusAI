@@ -31,6 +31,8 @@ class FeatureExtractor:
         response_time = self._estimate_response_time(message_content, channel)
         question_density = self._question_density(message_content)
         confusion_score = self._confusion_score(message_content)
+        help_seeking_score = self._help_seeking_score(message_content)
+        answer_commitment_score = self._answer_commitment_score(message_content)
         semantic_retry_score = self._semantic_retry_score(session_id, message_content, topic)
         topic_stability = self._topic_stability(session_id, topic)
         retry_count = self._update_retry_count(
@@ -58,6 +60,8 @@ class FeatureExtractor:
             confusion_score=confusion_score,
             topic_stability=topic_stability,
             semantic_retry_score=semantic_retry_score,
+            help_seeking_score=help_seeking_score,
+            answer_commitment_score=answer_commitment_score,
             ear_score=cam.get("ear_score"),
             gaze_on_screen=cam.get("gaze_on_screen"),
             hand_on_chin=cam.get("hand_on_chin"),
@@ -184,6 +188,70 @@ class FeatureExtractor:
         if len(content) <= 20:
             score += 0.08
         return round(min(1.0, score), 3)
+
+    def _help_seeking_score(self, content: str) -> float:
+        normalized = self._normalize_text(content)
+        patterns = [
+            "yardim",
+            "ipucu",
+            "coz",
+            "cevabi",
+            "direkt soyle",
+            "anlat",
+            "goster",
+            "help",
+            "explain",
+            "solution",
+        ]
+        score = 0.0
+        for pattern in patterns:
+            if pattern in normalized:
+                score += 0.14
+        if "?" in content:
+            score += 0.08
+        if len(content) <= 40:
+            score += 0.06
+        return round(min(1.0, score), 3)
+
+    def _answer_commitment_score(self, content: str) -> float:
+        normalized = self._normalize_text(content)
+        effort_patterns = [
+            "denedim",
+            "boyle yaptim",
+            "su adimi yaptim",
+            "buldum",
+            "hesapladim",
+            "dusundum",
+            "deniyorum",
+            "bence",
+            "kodum",
+            "ornek",
+            "adim",
+            "deneme",
+            "yaklasim",
+            "i tried",
+            "my attempt",
+            "i got",
+        ]
+        shortcut_patterns = [
+            "sadece cevabi",
+            "direkt cevabi",
+            "cevabi soyle",
+            "just answer",
+            "just give",
+        ]
+
+        score = 0.0
+        for pattern in effort_patterns:
+            if pattern in normalized:
+                score += 0.16
+        if re.search(r"[0-9_=<>/*+\-]", content):
+            score += 0.1
+        if len(content) >= 70:
+            score += 0.08
+        if any(pattern in normalized for pattern in shortcut_patterns):
+            score -= 0.25
+        return round(max(0.0, min(1.0, score)), 3)
 
     def _semantic_retry_score(
         self,

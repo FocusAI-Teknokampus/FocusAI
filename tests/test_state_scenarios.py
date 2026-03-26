@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime
 
-from backend.core.schemas import FeatureVector, InterventionType, UserState
+from backend.core.schemas import FeatureVector, InterventionType, ResponsePolicyMode, UserState
 from backend.state.state_model import StateModel
 from backend.state.uncertainty_engine import UncertaintyEngine
 
@@ -13,6 +13,8 @@ def make_feature(
     retry_count: int,
     response_time_seconds: float,
     message_length: int,
+    help_seeking_score: float = 0.0,
+    answer_commitment_score: float = 0.0,
     ear_score: float | None = None,
     gaze_on_screen: bool | None = None,
     hand_on_chin: bool | None = None,
@@ -26,6 +28,8 @@ def make_feature(
         response_time_seconds=response_time_seconds,
         message_length=message_length,
         topic="programlama",
+        help_seeking_score=help_seeking_score,
+        answer_commitment_score=answer_commitment_score,
         ear_score=ear_score,
         gaze_on_screen=gaze_on_screen,
         hand_on_chin=hand_on_chin,
@@ -90,6 +94,7 @@ class StateScenarioTests(unittest.TestCase):
             retry_count=0,
             response_time_seconds=70,
             message_length=105,
+            answer_commitment_score=0.65,
             gaze_on_screen=True,
             hand_on_chin=False,
         )
@@ -98,6 +103,7 @@ class StateScenarioTests(unittest.TestCase):
 
         self.assertEqual(estimate.predicted_state, UserState.FOCUSED)
         self.assertGreaterEqual(estimate.confidence, 0.55)
+        self.assertEqual(estimate.response_policy.value, "challenge")
         self.assertAlmostEqual(
             sum(estimate.state_probabilities.values()),
             1.0,
@@ -121,6 +127,7 @@ class StateScenarioTests(unittest.TestCase):
             retry_count=0,
             response_time_seconds=4,
             message_length=3,
+            help_seeking_score=0.45,
             gaze_on_screen=False,
             hand_on_chin=True,
         )
@@ -131,7 +138,7 @@ class StateScenarioTests(unittest.TestCase):
         self.assertEqual(estimate.predicted_state, UserState.DISTRACTED)
         self.assertGreaterEqual(estimate.confidence, 0.5)
         self.assertIsNotNone(intervention)
-        self.assertEqual(intervention.intervention_type, InterventionType.QUESTION)
+        self.assertEqual(intervention.intervention_type, InterventionType.BREAK)
 
     def test_stuck_student(self) -> None:
         baseline = make_baseline(
@@ -150,6 +157,8 @@ class StateScenarioTests(unittest.TestCase):
             retry_count=4,
             response_time_seconds=22,
             message_length=52,
+            help_seeking_score=0.5,
+            answer_commitment_score=0.72,
             gaze_on_screen=True,
             hand_on_chin=False,
         )
@@ -160,6 +169,10 @@ class StateScenarioTests(unittest.TestCase):
         self.assertEqual(estimate.predicted_state, UserState.STUCK)
         self.assertEqual(estimate.learning_pattern.value, "deep_attempt")
         self.assertGreaterEqual(estimate.confidence, 0.45)
+        self.assertEqual(estimate.response_policy.value, "guided_hint")
+        self.assertTrue(estimate.dominant_signals)
+        self.assertTrue(estimate.reasons)
+        self.assertTrue(estimate.policy_path)
         self.assertIsNotNone(intervention)
         self.assertEqual(intervention.intervention_type, InterventionType.HINT)
 
@@ -211,15 +224,19 @@ class StateScenarioTests(unittest.TestCase):
             retry_count=5,
             response_time_seconds=3,
             message_length=10,
+            help_seeking_score=0.75,
+            answer_commitment_score=0.1,
             gaze_on_screen=True,
             hand_on_chin=False,
         )
 
         estimate = self.model.predict(feature, baseline_profile=baseline)
+        estimate = estimate.model_copy(update={"response_policy": ResponsePolicyMode.GUIDED_HINT})
         before = self.engine.decide(estimate=estimate, session_id="policy-before")
 
         self.assertEqual(estimate.predicted_state, UserState.STUCK)
         self.assertEqual(estimate.learning_pattern.value, "shallow_learning")
+        self.assertEqual(estimate.response_policy.value, "guided_hint")
         self.assertIsNotNone(before)
         self.assertEqual(before.intervention_type, InterventionType.STRATEGY)
 

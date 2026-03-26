@@ -60,6 +60,10 @@ class BehaviorService:
             "decision_margin": state_estimate.decision_margin,
             "uncertainty_signal": state_estimate.uncertainty_signal,
             "learning_pattern": state_estimate.learning_pattern.value,
+            "response_policy": state_estimate.response_policy.value,
+            "dominant_signals": state_estimate.dominant_signals,
+            "reasons": state_estimate.reasons,
+            "policy_path": state_estimate.policy_path,
             "feature_vector": {
                 "idle_time_seconds": feature_vector.idle_time_seconds,
                 "retry_count": feature_vector.retry_count,
@@ -70,6 +74,8 @@ class BehaviorService:
                 "confusion_score": feature_vector.confusion_score,
                 "topic_stability": feature_vector.topic_stability,
                 "semantic_retry_score": feature_vector.semantic_retry_score,
+                "help_seeking_score": feature_vector.help_seeking_score,
+                "answer_commitment_score": feature_vector.answer_commitment_score,
             },
             "deviation_features": state_estimate.deviation_features,
             "state_scores": state_estimate.state_scores,
@@ -168,6 +174,35 @@ class BehaviorService:
                 }
             )
 
+        if f.help_seeking_score >= 0.5:
+            events.append(
+                {
+                    "event_type": "help_seeking_signal",
+                    "state_before": None,
+                    "state_after": estimate.state.value,
+                    "topic": f.topic,
+                    "severity": round(min(1.0, f.help_seeking_score), 3),
+                    "metadata": {
+                        "help_seeking_score": f.help_seeking_score,
+                        "answer_commitment_score": f.answer_commitment_score,
+                    },
+                }
+            )
+
+        if f.answer_commitment_score >= 0.5:
+            events.append(
+                {
+                    "event_type": "self_attempt_signal",
+                    "state_before": None,
+                    "state_after": estimate.state.value,
+                    "topic": f.topic,
+                    "severity": round(min(1.0, f.answer_commitment_score), 3),
+                    "metadata": {
+                        "answer_commitment_score": f.answer_commitment_score,
+                    },
+                }
+            )
+
         if f.idle_time_seconds > 180:
             events.append(
                 {
@@ -226,6 +261,10 @@ class BehaviorService:
         return events
 
     def _build_reason_summary(self, estimate: StateEstimate) -> str:
+        if estimate.reasons:
+            signals = ", ".join(estimate.dominant_signals[:2]) if estimate.dominant_signals else "global sinyaller"
+            return f"{estimate.reasons[0]} Baskin sinyaller: {signals}. Policy={estimate.response_policy.value}."
+
         deviations = estimate.deviation_features or {}
         high_signals = []
 

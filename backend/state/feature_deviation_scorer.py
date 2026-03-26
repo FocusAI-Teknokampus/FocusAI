@@ -36,6 +36,18 @@ class FeatureDeviationScorer:
                 risk_direction="high",
                 enough_data=enough_data,
             ),
+            "help_seeking_score": self._metric_deviation(
+                value=float(getattr(features, "help_seeking_score", 0.0) or 0.0),
+                metric=metrics.get("help_seeking_score"),
+                risk_direction="high",
+                enough_data=enough_data,
+            ),
+            "answer_commitment_score": self._metric_deviation(
+                value=float(getattr(features, "answer_commitment_score", 0.0) or 0.0),
+                metric=metrics.get("answer_commitment_score"),
+                risk_direction="low",
+                enough_data=enough_data,
+            ),
             "baseline_ready": enough_data,
         }
 
