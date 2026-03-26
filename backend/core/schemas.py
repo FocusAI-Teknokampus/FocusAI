@@ -215,6 +215,10 @@ class BehaviorSignal(BaseModel):
     answer_commitment_semantic_score: float = 0.0
     answer_commitment_classifier_score: float = 0.0
     fatigue_text_score: float = 0.0       # Acik yorgunluk/bitkinlik dili sinyali
+    frustration_text_score: float = 0.0   # Acik hayal kirikligi/bezginlik dili sinyali
+    confidence_text_score: float = 0.0    # Acik eminlik/kendinden emin ifade sinyali
+    overwhelm_text_score: float = 0.0     # Acik bunalmislik/yuk altinda kalma sinyali
+    urgency_text_score: float = 0.0       # Acik hiz/acele/kisa cevap beklentisi sinyali
 
 
 class FeatureVector(BaseModel):
@@ -244,6 +248,10 @@ class FeatureVector(BaseModel):
     answer_commitment_semantic_score: float = 0.0
     answer_commitment_classifier_score: float = 0.0
     fatigue_text_score: float = 0.0
+    frustration_text_score: float = 0.0
+    confidence_text_score: float = 0.0
+    overwhelm_text_score: float = 0.0
+    urgency_text_score: float = 0.0
 
     # Kamera sinyalleri (opsiyonel)
     ear_score: Optional[float] = None

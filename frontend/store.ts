@@ -120,6 +120,10 @@ interface DashboardResponse {
     state_probabilities?: Record<string, number>;
     feature_vector?: {
       fatigue_text_score?: number | null;
+      frustration_text_score?: number | null;
+      confidence_text_score?: number | null;
+      overwhelm_text_score?: number | null;
+      urgency_text_score?: number | null;
       confusion_score?: number | null;
       semantic_retry_score?: number | null;
       help_seeking_score?: number | null;

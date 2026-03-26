@@ -18,6 +18,10 @@ def make_feature(
     confusion_score: float = 0.0,
     semantic_retry_score: float = 0.0,
     fatigue_text_score: float = 0.0,
+    frustration_text_score: float = 0.0,
+    confidence_text_score: float = 0.0,
+    overwhelm_text_score: float = 0.0,
+    urgency_text_score: float = 0.0,
     ear_score: float | None = None,
     gaze_on_screen: bool | None = None,
     hand_on_chin: bool | None = None,
@@ -36,6 +40,10 @@ def make_feature(
         help_seeking_score=help_seeking_score,
         answer_commitment_score=answer_commitment_score,
         fatigue_text_score=fatigue_text_score,
+        frustration_text_score=frustration_text_score,
+        confidence_text_score=confidence_text_score,
+        overwhelm_text_score=overwhelm_text_score,
+        urgency_text_score=urgency_text_score,
         ear_score=ear_score,
         gaze_on_screen=gaze_on_screen,
         hand_on_chin=hand_on_chin,
@@ -331,6 +339,152 @@ class StateScenarioTests(unittest.TestCase):
         estimate = self.model.predict(feature, baseline_profile=baseline)
 
         self.assertEqual(estimate.response_policy, ResponsePolicyMode.RECOVERY)
+
+    def test_explicit_frustration_language_pushes_stuck_and_direct_help(self) -> None:
+        baseline = make_baseline(
+            response_mean=9,
+            response_std=3,
+            idle_mean=14,
+            idle_std=5,
+            length_mean=38,
+            length_std=12,
+            retry_mean=0.3,
+            retry_std=1,
+        )
+        feature = make_feature(
+            session_id="frustration-student",
+            idle_time_seconds=26,
+            retry_count=1,
+            response_time_seconds=9,
+            message_length=36,
+            confusion_score=0.38,
+            frustration_text_score=0.84,
+            answer_commitment_score=0.18,
+            help_seeking_score=0.32,
+            gaze_on_screen=True,
+            hand_on_chin=False,
+        )
+
+        estimate = self.model.predict(feature, baseline_profile=baseline)
+
+        self.assertEqual(estimate.predicted_state, UserState.STUCK)
+        self.assertEqual(estimate.response_policy, ResponsePolicyMode.DIRECT_HELP)
+
+    def test_normal_message_does_not_raise_frustration(self) -> None:
+        baseline = make_baseline(
+            response_mean=12,
+            response_std=4,
+            idle_mean=16,
+            idle_std=6,
+            length_mean=64,
+            length_std=18,
+            retry_mean=0.1,
+            retry_std=1,
+        )
+        feature = make_feature(
+            session_id="frustration-normal",
+            idle_time_seconds=18,
+            retry_count=0,
+            response_time_seconds=11,
+            message_length=72,
+            answer_commitment_score=0.62,
+            frustration_text_score=0.0,
+            gaze_on_screen=True,
+            hand_on_chin=False,
+        )
+
+        estimate = self.model.predict(feature, baseline_profile=baseline)
+
+        self.assertEqual(estimate.predicted_state, UserState.FOCUSED)
+        self.assertLess(estimate.state_probabilities[UserState.STUCK.value], 0.2)
+
+    def test_confident_student_gets_challenge_policy(self) -> None:
+        baseline = make_baseline(
+            response_mean=11,
+            response_std=4,
+            idle_mean=14,
+            idle_std=5,
+            length_mean=58,
+            length_std=16,
+            retry_mean=0.1,
+            retry_std=1,
+        )
+        feature = make_feature(
+            session_id="confidence-student",
+            idle_time_seconds=20,
+            retry_count=0,
+            response_time_seconds=13,
+            message_length=68,
+            answer_commitment_score=0.56,
+            confidence_text_score=0.82,
+            gaze_on_screen=True,
+            hand_on_chin=False,
+        )
+
+        estimate = self.model.predict(feature, baseline_profile=baseline)
+
+        self.assertEqual(estimate.predicted_state, UserState.FOCUSED)
+        self.assertEqual(estimate.response_policy, ResponsePolicyMode.CHALLENGE)
+
+    def test_overwhelmed_student_gets_recovery_policy(self) -> None:
+        baseline = make_baseline(
+            response_mean=14,
+            response_std=5,
+            idle_mean=18,
+            idle_std=7,
+            length_mean=48,
+            length_std=14,
+            retry_mean=0.2,
+            retry_std=1,
+        )
+        feature = make_feature(
+            session_id="overwhelmed-student",
+            idle_time_seconds=28,
+            retry_count=0,
+            response_time_seconds=16,
+            message_length=42,
+            confusion_score=0.22,
+            overwhelm_text_score=0.88,
+            answer_commitment_score=0.18,
+            gaze_on_screen=True,
+            hand_on_chin=False,
+        )
+
+        estimate = self.model.predict(feature, baseline_profile=baseline)
+
+        self.assertEqual(estimate.predicted_state, UserState.FATIGUED)
+        self.assertEqual(estimate.response_policy, ResponsePolicyMode.RECOVERY)
+        self.assertFalse(
+            any("netlestirme gerekiyor" in reason.lower() for reason in estimate.reasons)
+        )
+
+    def test_urgent_student_prefers_direct_help(self) -> None:
+        baseline = make_baseline(
+            response_mean=9,
+            response_std=3,
+            idle_mean=10,
+            idle_std=4,
+            length_mean=24,
+            length_std=8,
+            retry_mean=0.1,
+            retry_std=1,
+        )
+        feature = make_feature(
+            session_id="urgent-student",
+            idle_time_seconds=12,
+            retry_count=0,
+            response_time_seconds=5,
+            message_length=22,
+            urgency_text_score=0.85,
+            help_seeking_score=0.42,
+            answer_commitment_score=0.12,
+            gaze_on_screen=True,
+            hand_on_chin=False,
+        )
+
+        estimate = self.model.predict(feature, baseline_profile=baseline)
+
+        self.assertEqual(estimate.response_policy, ResponsePolicyMode.DIRECT_HELP)
 
 
 if __name__ == "__main__":

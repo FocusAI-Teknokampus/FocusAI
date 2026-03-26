@@ -361,6 +361,10 @@ export default function App() {
     dashboard?.latest_state_analysis ?? welcomeData?.latest_state_analysis ?? null;
   const latestFeatureVector = latestStateAnalysis?.feature_vector ?? null;
   const fatigueTextScore = latestFeatureVector?.fatigue_text_score ?? null;
+  const frustrationTextScore = latestFeatureVector?.frustration_text_score ?? null;
+  const confidenceTextScore = latestFeatureVector?.confidence_text_score ?? null;
+  const overwhelmTextScore = latestFeatureVector?.overwhelm_text_score ?? null;
+  const urgencyTextScore = latestFeatureVector?.urgency_text_score ?? null;
   const confusionScore = latestFeatureVector?.confusion_score ?? null;
   const semanticRetryScore = latestFeatureVector?.semantic_retry_score ?? null;
   const dominantSignals = latestStateAnalysis?.dominant_signals ?? currentMentorMessage?.dominantSignals ?? [];
@@ -816,12 +820,24 @@ export default function App() {
                   {lastMentorSource || 'Bu cevapta not kaynagi kullanilmadi.'}
                 </div>
               </div>
-              {(fatigueTextScore != null || confusionScore != null || semanticRetryScore != null || topStateProbabilities.length > 0 || dominantSignals.length > 0) && (
+              {(fatigueTextScore != null || frustrationTextScore != null || confidenceTextScore != null || overwhelmTextScore != null || urgencyTextScore != null || confusionScore != null || semanticRetryScore != null || topStateProbabilities.length > 0 || dominantSignals.length > 0) && (
                 <div style={{ backgroundColor: '#f8fafc', borderRadius: '18px', padding: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                   <div style={sectionLabelStyle}>Son state snapshot</div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '8px' }}>
                     <div style={{ fontSize: '13px', color: '#0f172a' }}>
                       Yorgunluk ifadesi: <strong>{getSignalLevel(fatigueTextScore)}</strong>
+                    </div>
+                    <div style={{ fontSize: '13px', color: '#0f172a' }}>
+                      Frustrasyon: <strong>{getSignalLevel(frustrationTextScore)}</strong>
+                    </div>
+                    <div style={{ fontSize: '13px', color: '#0f172a' }}>
+                      Eminlik: <strong>{getSignalLevel(confidenceTextScore)}</strong>
+                    </div>
+                    <div style={{ fontSize: '13px', color: '#0f172a' }}>
+                      Bunalmislik: <strong>{getSignalLevel(overwhelmTextScore)}</strong>
+                    </div>
+                    <div style={{ fontSize: '13px', color: '#0f172a' }}>
+                      Aciliyet: <strong>{getSignalLevel(urgencyTextScore)}</strong>
                     </div>
                     <div style={{ fontSize: '13px', color: '#0f172a' }}>
                       Karisiklik: <strong>{getSignalLevel(confusionScore)}</strong>

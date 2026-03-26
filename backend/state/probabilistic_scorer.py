@@ -31,6 +31,10 @@ class ProbabilisticScorer:
         help_seeking = getattr(features, "help_seeking_score", 0.0) or 0.0
         answer_commitment = getattr(features, "answer_commitment_score", 0.0) or 0.0
         fatigue_text_score = getattr(features, "fatigue_text_score", 0.0) or 0.0
+        frustration_text_score = getattr(features, "frustration_text_score", 0.0) or 0.0
+        confidence_text_score = getattr(features, "confidence_text_score", 0.0) or 0.0
+        overwhelm_text_score = getattr(features, "overwhelm_text_score", 0.0) or 0.0
+        urgency_text_score = getattr(features, "urgency_text_score", 0.0) or 0.0
 
         raw_scores[UserState.STUCK] += retry_spike * 1.4
         raw_scores[UserState.STUCK] += idle_spike * 0.9
@@ -39,10 +43,13 @@ class ProbabilisticScorer:
         raw_scores[UserState.STUCK] += confusion_score * 0.9
         raw_scores[UserState.STUCK] += help_seeking * 0.35
         raw_scores[UserState.STUCK] += low_commitment * 0.55
+        raw_scores[UserState.STUCK] += frustration_text_score * 0.95
+        raw_scores[UserState.STUCK] += overwhelm_text_score * 0.35
 
         raw_scores[UserState.FATIGUED] += idle_spike * 1.0
         raw_scores[UserState.FATIGUED] += slow_response * 0.7
         raw_scores[UserState.FATIGUED] += fatigue_text_score * 1.2
+        raw_scores[UserState.FATIGUED] += overwhelm_text_score * 0.9
         raw_scores[UserState.FATIGUED] += max(0.0, slow_response - 0.3) * 0.4
         raw_scores[UserState.FATIGUED] += max(0.0, low_commitment - 0.2) * 0.3
 
@@ -51,6 +58,8 @@ class ProbabilisticScorer:
         raw_scores[UserState.DISTRACTED] += max(0.0, 0.65 - topic_stability) * 1.2
         raw_scores[UserState.DISTRACTED] += question_density * 0.35 if features.message_length < 40 else 0.0
         raw_scores[UserState.DISTRACTED] += help_spike * 0.25
+        raw_scores[UserState.DISTRACTED] += frustration_text_score * 0.35
+        raw_scores[UserState.DISTRACTED] += overwhelm_text_score * 0.25
         if features.gaze_on_screen is False:
             raw_scores[UserState.DISTRACTED] += 0.3
         if features.hand_on_chin is True:
@@ -66,16 +75,22 @@ class ProbabilisticScorer:
             help_spike * 0.5,
             low_commitment * 0.6,
             fatigue_text_score * 0.8,
+            frustration_text_score * 0.65,
+            overwhelm_text_score * 0.8,
         )
         if focus_penalty < 0.2 and features.retry_count == 0:
             raw_scores[UserState.FOCUSED] += 1.0
         raw_scores[UserState.FOCUSED] += max(0.0, 0.8 - focus_penalty)
         raw_scores[UserState.FOCUSED] += max(0.0, topic_stability - 0.55) * 0.4
         raw_scores[UserState.FOCUSED] += answer_commitment * 0.85
+        raw_scores[UserState.FOCUSED] += confidence_text_score * 0.7
         raw_scores[UserState.FOCUSED] -= max(0.0, help_seeking - 0.55) * 0.2
         raw_scores[UserState.FOCUSED] -= fatigue_text_score * 0.6
+        raw_scores[UserState.FOCUSED] -= frustration_text_score * 0.45
+        raw_scores[UserState.FOCUSED] -= overwhelm_text_score * 0.55
         if features.gaze_on_screen is False:
             raw_scores[UserState.FOCUSED] -= 0.15
+        raw_scores[UserState.FOCUSED] -= urgency_text_score * 0.08
 
         probabilities = self._normalize(raw_scores)
         return raw_scores, probabilities

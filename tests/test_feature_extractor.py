@@ -119,6 +119,40 @@ class FeatureExtractorTests(unittest.TestCase):
         self.assertGreater(feature.fatigue_text_score, 0.0)
         self.assertGreaterEqual(feature.confusion_score, 0.1)
 
+    def test_explicit_frustration_language_raises_frustration_text_score(self) -> None:
+        feature = self.extractor.extract(
+            session_id="s8",
+            message_content="Of ya, bu soru cok sinir bozucu, yine olmadi.",
+            message_timestamp=datetime(2026, 3, 26, 11, 35, 0),
+        )
+
+        self.assertGreater(feature.frustration_text_score, 0.0)
+        self.assertEqual(feature.fatigue_text_score, 0.0)
+
+    def test_confidence_overwhelm_and_urgency_scores_are_separated(self) -> None:
+        confidence = self.extractor.extract(
+            session_id="s9",
+            message_content="Bence cozdum, sonuc 2 cikiyor ve bu adimdan eminim.",
+            message_timestamp=datetime(2026, 3, 26, 11, 40, 0),
+        )
+        overwhelm = self.extractor.extract(
+            session_id="s10",
+            message_content="Bunaldim, her sey birbirine girdi, nereden baslayacagimi bilmiyorum.",
+            message_timestamp=datetime(2026, 3, 26, 11, 41, 0),
+        )
+        urgency = self.extractor.extract(
+            session_id="s11",
+            message_content="Acele cevap lazim, sinavim var, hizlica ozetler misin?",
+            message_timestamp=datetime(2026, 3, 26, 11, 42, 0),
+        )
+
+        self.assertGreater(confidence.confidence_text_score, 0.0)
+        self.assertEqual(confidence.overwhelm_text_score, 0.0)
+        self.assertEqual(confidence.urgency_text_score, 0.0)
+        self.assertGreater(overwhelm.overwhelm_text_score, 0.0)
+        self.assertEqual(overwhelm.confidence_text_score, 0.0)
+        self.assertGreater(urgency.urgency_text_score, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

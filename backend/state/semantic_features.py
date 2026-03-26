@@ -112,6 +112,38 @@ FATIGUE_EXAMPLES: tuple[str, ...] = (
 )
 
 
+FRUSTRATION_EXAMPLES: tuple[str, ...] = (
+    "Of ya, yine olmadi, bu cok sinir bozucu.",
+    "Biktim, ayni yerde kaliyorum.",
+    "Yeter artik, bu soru beni delirtti.",
+    "Asiri sacma geliyor, neden hala cozemiyorum?",
+)
+
+
+CONFIDENCE_EXAMPLES: tuple[str, ...] = (
+    "Bence cozdum, sonuc 2 cikiyor.",
+    "Bu adimdan eminim, zincir kurali gerekiyor.",
+    "Cozumu buldum gibi, son kontrolu yapmak istiyorum.",
+    "Burada mantigi oturttum, devam edebilirim.",
+)
+
+
+OVERWHELM_EXAMPLES: tuple[str, ...] = (
+    "Bunaldim, konu ust uste biniyor.",
+    "Cok fazla geldi, nereden baslayacagimi bilmiyorum.",
+    "Her sey birbirine girdi, yetisemiyorum.",
+    "Kafam cok doldu, parcalara ayirmam lazim.",
+)
+
+
+URGENCY_EXAMPLES: tuple[str, ...] = (
+    "Acele cevap lazim, sinavim var.",
+    "Hizlica kisaca anlatir misin?",
+    "Cok vaktim yok, direkt ozet gec.",
+    "Hemen bakmam gerekiyor, cabuk bir yon ver.",
+)
+
+
 ANSWER_COMMITMENT_EXAMPLES: tuple[str, ...] = (
     "Once zincir kuralini denedim ama ikinci adimda hata yaptim.",
     "Benim denemem su sekilde, yanlis olan yeri bulmaya calisiyorum.",

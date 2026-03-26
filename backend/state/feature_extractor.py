@@ -9,10 +9,14 @@ from backend.core.schemas import CameraSignal, FeatureVector, InputChannel
 from backend.state.feature_classifier import FeatureIntentClassifier
 from backend.state.semantic_features import (
     ANSWER_COMMITMENT_EXAMPLES,
+    CONFIDENCE_EXAMPLES,
     DIRECT_ANSWER_EXAMPLES,
     FATIGUE_EXAMPLES,
+    FRUSTRATION_EXAMPLES,
     HELP_SEEKING_EXAMPLES,
+    OVERWHELM_EXAMPLES,
     SemanticFeatureProvider,
+    URGENCY_EXAMPLES,
     cosine_similarity,
     normalize_text,
 )
@@ -64,6 +68,10 @@ class FeatureExtractor:
             classifier_score=answer_commitment_classifier_score,
         )
         fatigue_text_score = self._fatigue_text_score(message_content)
+        frustration_text_score = self._frustration_text_score(message_content)
+        confidence_text_score = self._confidence_text_score(message_content)
+        overwhelm_text_score = self._overwhelm_text_score(message_content)
+        urgency_text_score = self._urgency_text_score(message_content)
         semantic_retry_score = self._semantic_retry_score(
             session_id=session_id,
             content=message_content,
@@ -104,6 +112,10 @@ class FeatureExtractor:
             answer_commitment_semantic_score=answer_commitment_semantic_score,
             answer_commitment_classifier_score=answer_commitment_classifier_score,
             fatigue_text_score=fatigue_text_score,
+            frustration_text_score=frustration_text_score,
+            confidence_text_score=confidence_text_score,
+            overwhelm_text_score=overwhelm_text_score,
+            urgency_text_score=urgency_text_score,
             ear_score=cam.get("ear_score"),
             gaze_on_screen=cam.get("gaze_on_screen"),
             hand_on_chin=cam.get("hand_on_chin"),
@@ -436,6 +448,179 @@ class FeatureExtractor:
             negative_examples=ANSWER_COMMITMENT_EXAMPLES + DIRECT_ANSWER_EXAMPLES,
             floor=0.18,
             ceiling=0.72,
+        )
+
+    def _frustration_text_score(self, content: str) -> float:
+        lexical = self._frustration_text_lexical_score(content)
+        semantic = self._frustration_text_semantic_score(content)
+        score = lexical + (semantic * 0.32)
+        return round(min(1.0, score), 3)
+
+    def _frustration_text_lexical_score(self, content: str) -> float:
+        normalized = self._normalize_text(content)
+        patterns = [
+            ("of ya", 0.34),
+            ("biktim", 0.34),
+            ("sinir bozucu", 0.36),
+            ("sinir oldum", 0.38),
+            ("yeter artik", 0.4),
+            ("deliriyorum", 0.42),
+            ("delirtecek", 0.38),
+            ("beni delirtti", 0.42),
+            ("sacma", 0.22),
+            ("cok sacma", 0.3),
+            ("nefret ettim", 0.36),
+            ("cildiracagim", 0.42),
+            ("cok bozucu", 0.32),
+            ("asiri sinir bozucu", 0.42),
+        ]
+        score = 0.0
+        matched_patterns: list[str] = []
+        for pattern, weight in patterns:
+            if pattern in normalized:
+                score += weight
+                matched_patterns.append(pattern)
+
+        if "!" in content:
+            score += min(0.12, content.count("!") * 0.06)
+        if len(matched_patterns) >= 2:
+            score += 0.1
+        if any(token in normalized for token in ("olmadi", "cozemiyorum", "takildim")) and matched_patterns:
+            score += 0.08
+        return min(1.0, score)
+
+    def _frustration_text_semantic_score(self, content: str) -> float:
+        return self._semantic_provider.example_similarity_score(
+            text=content,
+            positive_examples=FRUSTRATION_EXAMPLES,
+            negative_examples=ANSWER_COMMITMENT_EXAMPLES + FATIGUE_EXAMPLES,
+            floor=0.2,
+            ceiling=0.74,
+        )
+
+    def _confidence_text_score(self, content: str) -> float:
+        lexical = self._confidence_text_lexical_score(content)
+        semantic = self._confidence_text_semantic_score(content)
+        score = lexical + (semantic * 0.28)
+        return round(min(1.0, score), 3)
+
+    def _confidence_text_lexical_score(self, content: str) -> float:
+        normalized = self._normalize_text(content)
+        positive_patterns = [
+            ("eminim", 0.34),
+            ("bundan eminim", 0.42),
+            ("bence", 0.16),
+            ("cozdum", 0.26),
+            ("buldum", 0.24),
+            ("mantigi oturttum", 0.4),
+            ("dogru gibi", 0.18),
+            ("sonuc", 0.1),
+            ("cikiyor", 0.1),
+            ("bunu anladim", 0.3),
+            ("emin gibiyim", 0.22),
+        ]
+        negative_patterns = (
+            "emin degilim",
+            "galiba degil",
+            "sanirim yanlis",
+            "pek emin degilim",
+        )
+        score = 0.0
+        for pattern, weight in positive_patterns:
+            if pattern in normalized:
+                score += weight
+        if re.search(r"[0-9_=<>/*+\-]", content):
+            score += 0.08
+        if any(pattern in normalized for pattern in negative_patterns):
+            score -= 0.3
+        return max(0.0, min(1.0, score))
+
+    def _confidence_text_semantic_score(self, content: str) -> float:
+        return self._semantic_provider.example_similarity_score(
+            text=content,
+            positive_examples=CONFIDENCE_EXAMPLES,
+            negative_examples=HELP_SEEKING_EXAMPLES + FATIGUE_EXAMPLES + OVERWHELM_EXAMPLES,
+            floor=0.22,
+            ceiling=0.74,
+        )
+
+    def _overwhelm_text_score(self, content: str) -> float:
+        lexical = self._overwhelm_text_lexical_score(content)
+        semantic = self._overwhelm_text_semantic_score(content)
+        score = lexical + (semantic * 0.34)
+        return round(min(1.0, score), 3)
+
+    def _overwhelm_text_lexical_score(self, content: str) -> float:
+        normalized = self._normalize_text(content)
+        patterns = [
+            ("bunaldim", 0.38),
+            ("bunaliyorum", 0.34),
+            ("cok fazla geldi", 0.42),
+            ("yetisemiyorum", 0.38),
+            ("her sey birbirine girdi", 0.44),
+            ("kafam cok doldu", 0.42),
+            ("nereden baslayacagimi bilmiyorum", 0.38),
+            ("ust uste geliyor", 0.34),
+            ("karmasa oldu", 0.28),
+            ("hepsi birikti", 0.34),
+        ]
+        score = 0.0
+        matched = 0
+        for pattern, weight in patterns:
+            if pattern in normalized:
+                score += weight
+                matched += 1
+        if matched >= 2:
+            score += 0.08
+        if any(token in normalized for token in ("yoruldum", "yorgunum", "dinlenmem lazim")):
+            score += 0.08
+        return min(1.0, score)
+
+    def _overwhelm_text_semantic_score(self, content: str) -> float:
+        return self._semantic_provider.example_similarity_score(
+            text=content,
+            positive_examples=OVERWHELM_EXAMPLES,
+            negative_examples=CONFIDENCE_EXAMPLES + DIRECT_ANSWER_EXAMPLES,
+            floor=0.18,
+            ceiling=0.72,
+        )
+
+    def _urgency_text_score(self, content: str) -> float:
+        lexical = self._urgency_text_lexical_score(content)
+        semantic = self._urgency_text_semantic_score(content)
+        score = lexical + (semantic * 0.3)
+        return round(min(1.0, score), 3)
+
+    def _urgency_text_lexical_score(self, content: str) -> float:
+        normalized = self._normalize_text(content)
+        patterns = [
+            ("acil", 0.34),
+            ("acele", 0.28),
+            ("acelem var", 0.42),
+            ("sinavim var", 0.42),
+            ("hizlica", 0.28),
+            ("cabuk", 0.24),
+            ("hemen", 0.2),
+            ("kisaca", 0.22),
+            ("cok vaktim yok", 0.4),
+            ("direkt ozet", 0.3),
+            ("kisa cevap", 0.24),
+        ]
+        score = 0.0
+        for pattern, weight in patterns:
+            if pattern in normalized:
+                score += weight
+        if len(content) <= 32:
+            score += 0.06
+        return min(1.0, score)
+
+    def _urgency_text_semantic_score(self, content: str) -> float:
+        return self._semantic_provider.example_similarity_score(
+            text=content,
+            positive_examples=URGENCY_EXAMPLES,
+            negative_examples=ANSWER_COMMITMENT_EXAMPLES + CONFIDENCE_EXAMPLES,
+            floor=0.2,
+            ceiling=0.74,
         )
 
     def _semantic_retry_score(

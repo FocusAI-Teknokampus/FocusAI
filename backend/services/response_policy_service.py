@@ -18,13 +18,13 @@ class ResponsePolicyService:
         baseline_profile: Optional[dict] = None,
     ) -> dict:
         dominant_signals = self._dominant_signals(estimate, feature_vector)
-        reasons = self._reasons(estimate, feature_vector, dominant_signals)
         mode = self._select_mode(
             estimate=estimate,
             feature_vector=feature_vector,
             user_profile=user_profile,
             baseline_profile=baseline_profile or {},
         )
+        reasons = self._reasons(estimate, feature_vector, dominant_signals, mode)
         policy_path = [
             f"state:{estimate.state.value}",
             f"confidence:{round(estimate.confidence, 2)}",
@@ -46,12 +46,17 @@ class ResponsePolicyService:
         baseline_profile: dict,
     ) -> ResponsePolicyMode:
         fatigue_text_score = float(getattr(feature_vector, "fatigue_text_score", 0.0) or 0.0)
+        frustration_text_score = float(getattr(feature_vector, "frustration_text_score", 0.0) or 0.0)
+        confidence_text_score = float(getattr(feature_vector, "confidence_text_score", 0.0) or 0.0)
+        overwhelm_text_score = float(getattr(feature_vector, "overwhelm_text_score", 0.0) or 0.0)
+        urgency_text_score = float(getattr(feature_vector, "urgency_text_score", 0.0) or 0.0)
         ranked_states = sorted(
             (estimate.state_probabilities or {}).items(),
             key=lambda item: item[1],
             reverse=True,
         )
         fatigued_top_two = any(label == UserState.FATIGUED.value for label, _ in ranked_states[:2])
+        stuck_top_two = any(label == UserState.STUCK.value for label, _ in ranked_states[:2])
         work_style = baseline_profile.get("work_style", {}) if baseline_profile else {}
         challenge_tolerance = (
             user_profile.challenge_tolerance
@@ -75,6 +80,12 @@ class ResponsePolicyService:
         if fatigue_text_score >= 0.58 and fatigued_top_two:
             return ResponsePolicyMode.RECOVERY
 
+        if overwhelm_text_score >= 0.58 and fatigued_top_two:
+            return ResponsePolicyMode.RECOVERY
+
+        if urgency_text_score >= 0.6 and confidence_text_score < 0.45:
+            return ResponsePolicyMode.DIRECT_HELP
+
         if estimate.confidence < estimate.threshold or estimate.uncertainty_signal >= 0.6:
             return ResponsePolicyMode.CLARIFY
 
@@ -84,11 +95,15 @@ class ResponsePolicyService:
         if estimate.state == UserState.DISTRACTED:
             if feature_vector.topic_stability <= 0.4 or feature_vector.idle_time_seconds >= 150:
                 return ResponsePolicyMode.RECOVERY
+            if overwhelm_text_score >= 0.55:
+                return ResponsePolicyMode.RECOVERY
             if challenge_tolerance >= 0.72 and feature_vector.answer_commitment_score >= 0.6:
                 return ResponsePolicyMode.CHALLENGE
             return ResponsePolicyMode.CLARIFY if intervention_sensitivity >= 0.75 else ResponsePolicyMode.RECOVERY
 
         if estimate.state == UserState.STUCK:
+            if frustration_text_score >= 0.58 and feature_vector.answer_commitment_score < 0.45:
+                return ResponsePolicyMode.DIRECT_HELP
             if prefers_direct_explanation and feature_vector.help_seeking_score >= 0.55:
                 return ResponsePolicyMode.DIRECT_HELP
             if feature_vector.answer_commitment_score >= 0.5 or prefers_hint_first:
@@ -98,11 +113,18 @@ class ResponsePolicyService:
             return ResponsePolicyMode.DIRECT_HELP if feature_vector.help_seeking_score >= 0.65 else ResponsePolicyMode.GUIDED_HINT
 
         if estimate.state == UserState.FOCUSED:
+            if urgency_text_score >= 0.6 and confidence_text_score < 0.45:
+                return ResponsePolicyMode.DIRECT_HELP
             if (challenge_tolerance >= 0.65 or feature_vector.answer_commitment_score >= 0.65) and feature_vector.answer_commitment_score >= 0.55:
+                return ResponsePolicyMode.CHALLENGE
+            if confidence_text_score >= 0.55 and feature_vector.answer_commitment_score >= 0.45:
                 return ResponsePolicyMode.CHALLENGE
             if feature_vector.help_seeking_score >= 0.6 and feature_vector.answer_commitment_score < 0.35:
                 return ResponsePolicyMode.DIRECT_HELP
             return ResponsePolicyMode.GUIDED_HINT if prefers_hint_first else ResponsePolicyMode.DIRECT_HELP
+
+        if frustration_text_score >= 0.6 and stuck_top_two:
+            return ResponsePolicyMode.DIRECT_HELP
 
         question_style = baseline_profile.get("question_style")
         if question_style == "short_questions" and feature_vector.message_length <= 25:
@@ -133,6 +155,14 @@ class ResponsePolicyService:
             signals.append((feature_vector.confusion_score, "high confusion"))
         if feature_vector.fatigue_text_score >= 0.45:
             signals.append((feature_vector.fatigue_text_score, "explicit fatigue language"))
+        if feature_vector.frustration_text_score >= 0.45:
+            signals.append((feature_vector.frustration_text_score, "explicit frustration language"))
+        if feature_vector.overwhelm_text_score >= 0.45:
+            signals.append((feature_vector.overwhelm_text_score, "explicit overwhelm language"))
+        if feature_vector.confidence_text_score >= 0.45:
+            signals.append((feature_vector.confidence_text_score, "explicit confidence language"))
+        if feature_vector.urgency_text_score >= 0.45:
+            signals.append((feature_vector.urgency_text_score, "explicit urgency language"))
         if feature_vector.answer_commitment_score >= 0.55:
             signals.append((feature_vector.answer_commitment_score, "strong answer commitment"))
 
@@ -144,10 +174,11 @@ class ResponsePolicyService:
         estimate: StateEstimate,
         feature_vector: FeatureVector,
         dominant_signals: list[str],
+        mode: ResponsePolicyMode,
     ) -> list[str]:
         reasons: list[str] = []
 
-        if estimate.confidence < estimate.threshold:
+        if mode == ResponsePolicyMode.CLARIFY and estimate.confidence < estimate.threshold:
             reasons.append(
                 "State tahmini kullanici esiginin altinda kaldigi icin once netlestirme gerekiyor."
             )
@@ -170,6 +201,26 @@ class ResponsePolicyService:
         if feature_vector.fatigue_text_score >= 0.55:
             reasons.append(
                 "Kullanici mesajinda acik yorgunluk ifade ediyor; tonun sakinlesmesi ve hedefin kuculmesi gerekiyor."
+            )
+
+        if feature_vector.frustration_text_score >= 0.55:
+            reasons.append(
+                "Mesajda acik hayal kirikligi var; yanit daha yatistirici ve daha az dolayli olmali."
+            )
+
+        if feature_vector.overwhelm_text_score >= 0.55:
+            reasons.append(
+                "Kullanici bunalmislik ifade ediyor; cevabi parcalara bolup tempoyu dusurmek gerekiyor."
+            )
+
+        if feature_vector.confidence_text_score >= 0.55:
+            reasons.append(
+                "Mesajda belirgin eminlik var; kullanicinin kendi akil yurutmesini destekleyen bir ton uygun."
+            )
+
+        if feature_vector.urgency_text_score >= 0.55:
+            reasons.append(
+                "Mesaj aciliyet tasiyor; daha kisa ve dogrudan bir cevap bekleniyor."
             )
 
         if feature_vector.topic_stability <= 0.35:

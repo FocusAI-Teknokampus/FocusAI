@@ -349,6 +349,22 @@ class MentorAgent:
                 }
             )
 
+        if feature_vector and feature_vector.overwhelm_text_score >= 0.55:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": "If the user sounds overwhelmed, break the explanation into small steps and reduce cognitive load.",
+                }
+            )
+
+        if feature_vector and feature_vector.urgency_text_score >= 0.55:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": "If the user sounds urgent, be concise and lead with the shortest useful answer first.",
+                }
+            )
+
         if response_policy:
             policy_hint = {
                 ResponsePolicyMode.DIRECT_HELP: "Cevabi net ve dogrudan ver; gereksiz dolanma.",

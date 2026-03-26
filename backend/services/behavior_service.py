@@ -91,6 +91,10 @@ class BehaviorService:
                 "answer_commitment_semantic_score": feature_vector.answer_commitment_semantic_score,
                 "answer_commitment_classifier_score": feature_vector.answer_commitment_classifier_score,
                 "fatigue_text_score": feature_vector.fatigue_text_score,
+                "frustration_text_score": feature_vector.frustration_text_score,
+                "confidence_text_score": feature_vector.confidence_text_score,
+                "overwhelm_text_score": feature_vector.overwhelm_text_score,
+                "urgency_text_score": feature_vector.urgency_text_score,
                 "ear_score": feature_vector.ear_score,
                 "gaze_on_screen": feature_vector.gaze_on_screen,
                 "hand_on_chin": feature_vector.hand_on_chin,
@@ -100,6 +104,10 @@ class BehaviorService:
             "state_scores": state_estimate.state_scores,
             "state_probabilities": state_estimate.state_probabilities,
             "fatigue_text_score": feature_vector.fatigue_text_score,
+            "frustration_text_score": feature_vector.frustration_text_score,
+            "confidence_text_score": feature_vector.confidence_text_score,
+            "overwhelm_text_score": feature_vector.overwhelm_text_score,
+            "urgency_text_score": feature_vector.urgency_text_score,
             "reason_summary": self._build_reason_summary(state_estimate),
         }
         self.session_service.log_behavior_event(
@@ -247,6 +255,75 @@ class BehaviorService:
                         "match_type": match_type,
                         "confusion_score": f.confusion_score,
                         "answer_commitment_score": f.answer_commitment_score,
+                    },
+                }
+            )
+
+        if f.frustration_text_score >= 0.45:
+            match_type = "hybrid_text_match"
+            if f.frustration_text_score >= 0.75:
+                match_type = "explicit_frustration_phrase"
+            elif f.frustration_text_score < 0.58:
+                match_type = "semantic_frustration_match"
+
+            events.append(
+                {
+                    "event_type": "frustration_text_signal",
+                    "state_before": None,
+                    "state_after": estimate.state.value,
+                    "topic": f.topic,
+                    "severity": round(min(1.0, f.frustration_text_score), 3),
+                    "metadata": {
+                        "frustration_text_score": f.frustration_text_score,
+                        "match_type": match_type,
+                        "confusion_score": f.confusion_score,
+                        "semantic_retry_score": f.semantic_retry_score,
+                    },
+                }
+            )
+
+        if f.confidence_text_score >= 0.45:
+            events.append(
+                {
+                    "event_type": "confidence_text_signal",
+                    "state_before": None,
+                    "state_after": estimate.state.value,
+                    "topic": f.topic,
+                    "severity": round(min(1.0, f.confidence_text_score), 3),
+                    "metadata": {
+                        "confidence_text_score": f.confidence_text_score,
+                        "answer_commitment_score": f.answer_commitment_score,
+                    },
+                }
+            )
+
+        if f.overwhelm_text_score >= 0.45:
+            events.append(
+                {
+                    "event_type": "overwhelm_text_signal",
+                    "state_before": None,
+                    "state_after": estimate.state.value,
+                    "topic": f.topic,
+                    "severity": round(min(1.0, f.overwhelm_text_score), 3),
+                    "metadata": {
+                        "overwhelm_text_score": f.overwhelm_text_score,
+                        "confusion_score": f.confusion_score,
+                        "fatigue_text_score": f.fatigue_text_score,
+                    },
+                }
+            )
+
+        if f.urgency_text_score >= 0.45:
+            events.append(
+                {
+                    "event_type": "urgency_text_signal",
+                    "state_before": None,
+                    "state_after": estimate.state.value,
+                    "topic": f.topic,
+                    "severity": round(min(1.0, f.urgency_text_score), 3),
+                    "metadata": {
+                        "urgency_text_score": f.urgency_text_score,
+                        "help_seeking_score": f.help_seeking_score,
                     },
                 }
             )
